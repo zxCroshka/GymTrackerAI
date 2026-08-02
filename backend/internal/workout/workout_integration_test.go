@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/auth"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/exercise"
@@ -340,7 +341,8 @@ func newWorkoutIntegrationServer(t *testing.T) (*httptest.Server, *pgxpool.Pool,
 	}
 	exerciseService := exercise.NewService(pool, exercise.NewRepository(pool))
 	programService := program.NewService(pool, program.NewRepository(pool), exerciseService)
-	workoutService := NewService(pool, NewRepository(pool), programService, exerciseService)
+	derived := workoutIntegrationDerived{}
+	workoutService := NewService(pool, NewRepository(pool), programService, exerciseService, derived, derived)
 	authHandler := auth.NewHandler(authService, authConfig, logger)
 	programHandler := program.NewHandler(programService, logger)
 	workoutHandler := NewHandler(workoutService, logger)
@@ -356,6 +358,16 @@ func newWorkoutIntegrationServer(t *testing.T) (*httptest.Server, *pgxpool.Pool,
 	}))
 	t.Cleanup(server.Close)
 	return server, pool, workoutService
+}
+
+type workoutIntegrationDerived struct{}
+
+func (workoutIntegrationDerived) RebuildUser(context.Context, pgx.Tx, string, time.Time) error {
+	return nil
+}
+func (workoutIntegrationDerived) LockUser(context.Context, pgx.Tx, string) error { return nil }
+func (workoutIntegrationDerived) MarkPeriodsStale(context.Context, pgx.Tx, string, []time.Time, time.Time) error {
+	return nil
 }
 
 type registeredWorkoutUser struct {

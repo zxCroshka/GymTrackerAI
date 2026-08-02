@@ -48,11 +48,14 @@ The monorepo now contains a working technical foundation:
 - authenticated full-aggregate program routes for create/read/update/archive, duplication, and transactional activation with one active program per user;
 - authenticated owner-scoped workout routes for starting an ad-hoc workout or one snapshotted from an active program day, retrieving the single active workout, history/detail reads, metadata updates, nested exercise/set CRUD, previous exercise results, state-idempotent completion, CSV export, and explicit hard deletion with cascading children;
 - direct completed-workout corrections guarded by ownership, the workout ETag, and one transaction while retaining completed status and a valid non-null completion instant; workout volume and Epley estimated 1RM for sets of at most 15 repetitions are currently calculated dynamically from source sets rather than stored as progress projections;
+- authenticated measurement and wellness routes for canonical body values, sleep, quality/energy, steps, daily aggregate calories/macronutrients, strict local-civil-day uniqueness, and report staleness;
+- deterministic progress dashboard, weight/moving-average series, per-exercise dynamics, and auditable personal records for max weight, repetitions at an exact weight, set volume, and Epley estimated 1RM;
+- synchronous deterministic weekly report generation under a shared per-user source lock, with profile-local UTC week bounds, previous-week comparison, weight/wellness signals, new records, pain messages, immutable revisions/cutoffs, and transactional staleness/regeneration;
 - `GET /health/live` and `GET /health/ready` operational endpoints;
 - a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
 - reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
 
-Workout frontend screens, progress/personal-record projections, weekly reports, and AI Coach use cases remain intentionally unimplemented. The only measurement write currently exposed is the initial measurement created transactionally by authenticated profile import. No exercise, program, or workout frontend screens were added in this backend stage. When progress and report modules are implemented, completed-workout correction and deletion transactions will also recalculate their projections and invalidate affected reports through narrow module ports; the current backend does not claim those future side effects.
+Workout/measurement/progress/report frontend screens and AI Coach use cases remain intentionally unimplemented. This stage adds backend APIs only and makes completed-workout completion/correction/deletion rebuild personal records and stale affected current reports through narrow same-transaction ports. Weekly reports contain no AI output and make no OpenAI calls.
 
 ## Local development
 
@@ -92,7 +95,7 @@ curl http://localhost:8080/health/live
 curl http://localhost:8080/health/ready
 ```
 
-Implemented API route groups are auth (`register`, `login`, `refresh`, `logout`), own profile (`GET`, `PATCH`, `import`), exercises (`GET/POST /api/v1/exercises`, `GET/PATCH/DELETE /api/v1/exercises/{id}`), programs (`GET/POST /api/v1/programs`, `GET/PATCH/DELETE /api/v1/programs/{id}`, `duplicate`, `activate`), and owner-scoped workouts with active/history/detail/export, completion, nested exercise/set, and previous-result operations. Exact schemas, filters, cookie behavior, archive rules, and ETag preconditions are in `docs/openapi.yaml`.
+Implemented API route groups are auth/profile, exercises, programs, workouts, body measurements (`/api/v1/measurements`), wellness (`/api/v1/wellness`), progress dashboard/weight/exercise/records, and deterministic weekly reports (`POST /api/v1/reports/weekly`, `GET /api/v1/reports[/{id}]`). Exact schemas, filters, archive rules, calculations, and ETag preconditions are in `docs/openapi.yaml` and `docs/api-contract.md`.
 
 Registration returns an access token in JSON and sets the raw refresh token only as an HttpOnly cookie:
 
@@ -109,7 +112,7 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 - `make backend-run` — run the API locally.
 - `make backend-test` — run Go tests.
-- `make backend-integration-test` — run migration, auth/user, exercise/program/workout integration tests against the dedicated disposable PostgreSQL database in `TEST_DATABASE_URL`; tests perform full up/down.
+- `make backend-integration-test` — run migration and all backend integration tests, including measurement/progress/report flows, against the dedicated disposable PostgreSQL database in `TEST_DATABASE_URL`; tests perform full up/down.
 - `make backend-fmt` — format Go files.
 - `make frontend-dev` — run the Next.js development server.
 - `make frontend-test` — run frontend unit tests.
@@ -123,6 +126,6 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 Schema migration is never performed by API startup. The Compose `backend` service depends on successful completion of the one-shot `migrate` service, so multiple API replicas cannot race to migrate the database.
 
-PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs migration, auth/user, exercise/program, and workout repository/HTTP scenarios with PostgreSQL 16.
+PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs the full tagged backend suite with PostgreSQL 16.
 
 Docker and the Compose plugin are installed in the current development environment, but daemon availability can vary by session. Try Docker-backed integration checks when relevant; never use `sudo` or alter host permissions. If daemon access actually fails, `docker compose --env-file .env.example config --quiet` still validates Compose statically and the blocked container checks must be reported explicitly.

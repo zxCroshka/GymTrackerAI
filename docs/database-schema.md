@@ -17,7 +17,7 @@ Last updated: 2026-08-02
 - Every foreign-key column has a supporting index unless it is already the leading part of a unique/primary index.
 - JSONB is limited to versioned document snapshots: typed coach proposals, minimized tool audit summaries, report metrics, and idempotent response replay. Core training data remains relational.
 
-The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds typed profile/import fields and normalized notes. `000003_add_exercise_capabilities` adds the controlled exercise type, equipment/muscle allowlists, tracking capabilities, and catalogue filter index. `000004_extend_workout_tracking` adds workout feedback, immutable exercise-capability snapshots, duration/distance set metrics, and event-order indexes without rewriting existing workout facts. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
+The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds typed profile/import fields and normalized notes. `000003_add_exercise_capabilities` adds exercise capabilities and catalogue indexes. `000004_extend_workout_tracking` adds workout feedback, immutable capability snapshots, duration/distance metrics, and event-order indexes. `000005_extend_daily_wellness` preserves the original observation instant and adds checked daily steps and aggregate nutrition values. Every migration has a paired rollback; `000005` refuses rollback when new facts cannot be represented by the preceding schema.
 
 ## 2. Tenant isolation pattern
 
@@ -303,7 +303,7 @@ Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_exercise_id, posit
 
 At the API boundary `position` is represented as `set_number`, `completed_at` as `performed_at`, and `notes` as `note`. API flags map to the existing normalized category: `warmup` means `set_type = 'warmup'`, `failure` means `set_type = 'failure'`; they are not duplicated as stored boolean columns and cannot both be true.
 
-Planned target rows are copied into the workout. Subsequent program changes therefore cannot alter a workout already instantiated. An explicit user correction may edit a completed aggregate under its root version lock; dynamic metrics immediately derive from the corrected rows. Once progress/report modules are implemented, their recalculation/staleness ports must join this same transaction. Program or exercise metadata changes never rewrite the snapshot.
+Planned target rows are copied into the workout. Subsequent program changes therefore cannot alter a workout already instantiated. An explicit user correction may edit a completed aggregate under its root version lock; dynamic metrics derive from the corrected rows, personal records are rebuilt, and affected current reports become stale in the same transaction. Program or exercise metadata changes never rewrite the snapshot.
 
 ## 7. Measurement and progress tables
 
@@ -340,10 +340,14 @@ Checks require at least one numeric measurement and positive supported values. C
 | `id` | `uuid` | no | PK |
 | `user_id` | `uuid` | no | FK `users(id) ON DELETE CASCADE` |
 | `day_start_at` | `timestamptz` | no | backend-calculated start of local civil day converted to UTC |
+| `observed_at` | `timestamptz` | no | original client-supplied UTC observation instant |
 | `timezone_at_entry` | `text` | no | current validated profile IANA zone snapshot; not client authority |
 | `sleep_minutes` | `smallint` | yes | `0..1440` |
 | `sleep_quality` | `smallint` | yes | `1..5` |
 | `energy_level` | `smallint` | yes | `1..5` |
+| `steps` | `integer` | yes | `0..1,000,000` daily aggregate |
+| `calories_kcal` | `numeric(8,2)` | yes | `0..50,000` daily aggregate |
+| `protein_g`, `fat_g`, `carbs_g` | `numeric(8,2)` | yes | each `0..5,000` grams |
 | `stress_level` | `smallint` | yes | `1..5` |
 | `soreness_level` | `smallint` | yes | `1..5` |
 | `mood` | `smallint` | yes | `1..5` |
@@ -353,7 +357,7 @@ Checks require at least one numeric measurement and positive supported values. C
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Checks require at least one wellness value or non-empty notes and verify score ranges. The request supplies an observation instant; the backend calculates `day_start_at` from the current profile zone using civil-day rules (the first valid instant is not universally `00:00`). Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (user_id, day_start_at)`; `(user_id, day_start_at DESC)`.
+Checks require at least one wellness value or non-empty notes and verify score/nutrition/activity ranges. The request supplies `observed_at`; the backend calculates `day_start_at` from the current profile zone using civil-day rules (the first valid instant is not universally `00:00`). Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (user_id, day_start_at)`; `(user_id, day_start_at DESC)`; `(user_id, observed_at DESC, id DESC)`.
 
 ### 7.3 `personal_records` (`progress` module)
 
@@ -372,7 +376,7 @@ This table is a rebuildable projection. Completed workout sets remain the source
 | `achieved_at` | `timestamptz` | no | copied set completion instant |
 | `created_at` | `timestamptz` | no | projection creation instant |
 
-Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (user_id, workout_set_id, record_type)`; `(workout_set_id, user_id)`; `(exercise_id)`; `(user_id, exercise_id, record_type, value DESC)`; `(user_id, achieved_at DESC)`. There is no public write API. `exercise_id` is deliberate projection data; rebuild/integration tests prove it equals the source set's workout exercise. `max_reps` means the largest repetition count in one completed working set regardless of load.
+Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (user_id, workout_set_id, record_type)`; `(workout_set_id, user_id)`; `(exercise_id)`; `(user_id, exercise_id, record_type, value DESC)`; `(user_id, achieved_at DESC)`. There is no public write API. `exercise_id` is deliberate projection data. `max_reps` discoveries are compared independently per exact canonical `workout_sets.weight_kg`; the source set supplies that weight without duplicating it on the projection row. A set without a recorded weight does not establish this record type.
 
 ## 8. Coach tables
 
@@ -516,7 +520,7 @@ Constraints/indexes: `UNIQUE (id, user_id)` plus `UNIQUE (id, user_id, period_st
 
 An AI insight failure can coexist with a `ready` deterministic report and `ai_insight_status = 'failed'`. Any workout/measurement/wellness mutation whose old or new effective instant falls in a generated interval marks its current ready report `stale`; regeneration creates a new revision.
 
-For first generation, the pending row is current because no prior artifact exists. During regeneration, the prior ready/stale/failed artifact remains current and the new pending row has `is_current = false`; once the new row reaches `ready`, one transaction switches the marker. A failed replacement therefore does not hide the last usable artifact.
+The implemented deterministic endpoint inserts the first revision directly as current `ready`. If that artifact is stale, synchronous regeneration calculates the replacement inside one bounded `READ COMMITTED` transaction under the same per-user lock used by all supported report-source mutations, switches the old marker off, and inserts the new current `ready` revision. This ordering lets a generator that waited for a writer see its committed facts and then fences later writers until aggregation commits. The pending/generating/lease columns and unfinished unique index remain reserved for future asynchronous AI narrative or generation work and are not presented as active behavior.
 
 ### 9.2 `idempotency_keys` (platform support)
 
@@ -601,13 +605,13 @@ The application must enforce these rules in a transaction with locks where neede
 - at most one active program is switched without an intermediate invalid state;
 - nested program/workout changes increment the root version exactly once per request;
 - source program version is copied consistently when a workout is instantiated;
-- completed workout corrections are explicit, version-checked aggregate commands; dynamic metrics derive immediately from the corrected sets, and future personal-record/report ports must recalculate or stale projections atomically once implemented;
+- completed workout corrections are explicit, version-checked aggregate commands; dynamic metrics derive immediately, personal records are rebuilt, and affected report periods are staled atomically;
 - cancelled workout facts remain immutable except for explicit owner-authorized deletion;
 - personal records are recalculated from completed working sets after completion or a completed-data correction;
 - performed set fields are accepted only when enabled by the owning `workout_exercises` capability snapshot; duration and distance never rely on subsequently edited exercise metadata;
 - daily boundary and weekly boundaries match the stored IANA zone, including DST;
 - only the current weekly report revision has `is_current = true`;
-- report generation reads metrics/cutoff from one short `REPEATABLE READ` snapshot; every later source mutation affecting its interval marks the current ready artifact stale;
+- report generation reads metrics/cutoff under one short shared per-user source lock; every later source mutation affecting its interval marks the current ready artifact stale;
 - coach tool calls use the same user as their conversation/message;
 - recommendation source is a completed assistant message and its payload matches the versioned schema;
 - recommendation confirmation is current, owned, unexpired, proposal-hash matched, and program-version matched;
@@ -649,5 +653,6 @@ Canonical text limits are synchronized in OpenAPI/backend and duplicated as data
 - PostgreSQL integration tests apply the schema to an empty disposable database, test UTC sessions, transaction commit/rollback, cross-user isolation, idempotent seed behavior, exercise/program lifecycle and history retention, then execute the full rollback.
 - `make migrate-down` rolls back one migration and must never target a non-disposable database unintentionally.
 - The `000004` upgrade adds populated-table checks as `NOT VALID` and validates them explicitly. Its rollback first proves that capability/rest snapshots still match their referenced exercise/prescription, then installs and validates `NOT VALID` checks for the preceding workout/set representation before dropping an index, constraint, or column. It never rewrites a completed set into another status. Rollback stops if snapshots have diverged, workout feedback or duration/distance data exists, or a completed set shape cannot be represented by `000003`; production rollback after new feature data exists therefore requires an explicit export/restore or forward fix rather than silent data loss.
+- The `000005` upgrade backfills `observed_at` from the only previously stored boundary before making it required, then validates new checks and adds the observation cursor index. Rollback first proves all new aggregate fields are null and `observed_at = day_start_at`; otherwise it aborts rather than discard facts.
 - Before later migrations add indexes or constraints to populated tables, assess lock duration and provide an upgrade test from the preceding version.
 - pgx v5.7.2 and golang-migrate v4.18.2 are pinned because their declared minimum Go versions remain compatible with Go 1.22.2.

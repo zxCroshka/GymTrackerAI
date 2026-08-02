@@ -43,6 +43,21 @@ func (r *Repository) Get(ctx context.Context, userID string) (databaseProfile, e
 	return loadProfile(ctx, r.pool, userID, false)
 }
 
+// Timezone returns the validated profile IANA time zone through the user
+// module's public query boundary. Calendar-aware modules must not query the
+// user_profiles table directly.
+func (r *Repository) Timezone(ctx context.Context, userID string) (string, error) {
+	var timezone string
+	err := r.pool.QueryRow(ctx, `SELECT timezone FROM user_profiles WHERE user_id = $1`, userID).Scan(&timezone)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrProfileNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get user profile timezone: %w", err)
+	}
+	return timezone, nil
+}
+
 func (r *Repository) Lock(ctx context.Context, tx pgx.Tx, userID string) (databaseProfile, error) {
 	return loadProfile(ctx, tx, userID, true)
 }

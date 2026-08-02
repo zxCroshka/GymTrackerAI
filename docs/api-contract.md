@@ -1,6 +1,6 @@
 # GymTracker AI REST API contract
 
-Status: implemented contract through backend exercise/program stage; workout is the current implementation contract and later modules remain design
+Status: implemented backend contract through measurement/progress/deterministic report; frontend and AI routes remain design
 
 Last updated: 2026-08-02
 
@@ -102,7 +102,7 @@ The client may send a valid bounded `X-Request-ID`; otherwise the backend create
 
 ## 3. Pagination, filtering, ordering, and caching
 
-Implemented growing collections use `?limit=50&cursor=<opaque>` with a maximum of 100. Cursors encode a stable sort key plus UUID as strictly validated opaque base64url data; they are not signatures or authorization artifacts. Clients must reuse a cursor only with the route/filter/order that produced it. Every page query independently reapplies ownership and filters; malformed cursors return `400`.
+Exercise, program, workout, measurement, and wellness collections use `?limit=50&cursor=<opaque>` with a maximum of 100. Cursors encode a stable sort key plus UUID as strictly validated opaque base64url data; they are not signatures or authorization artifacts. Clients must reuse a cursor only with the route/filter/order that produced it. Every page query independently reapplies ownership and filters; malformed cursors return `400`. Personal-record and weekly-report views are bounded latest-result queries with allowlisted filters and `limit <= 100`; they do not advertise a cursor in the current contract.
 
 History defaults to descending event instant then ID; ordered aggregate children return ascending `position` and are not cursor-paginated within documented aggregate limits. `total` is omitted unless a concrete UI requirement justifies the count query.
 
@@ -110,16 +110,16 @@ Collection filters are allowlisted per endpoint. Repeating/unknown filters retur
 
 ## 4. Idempotency and optimistic concurrency
 
-Durable `Idempotency-Key` replay storage is not implemented yet and is therefore not advertised by implemented auth, profile, exercise, or program operations. `POST /programs/{id}/duplicate` is not transport-idempotent: after an ambiguous network failure the client must refetch the list before deciding whether to retry. Program activation is transactional and state-safe, but a retry with the consumed ETag receives `412` and must refetch.
+Durable `Idempotency-Key` replay storage is not implemented yet and is therefore not advertised by implemented operations. After an ambiguous measurement/wellness create failure the client must refetch the corresponding list. Program duplication/workout child creation have the same limitation.
 
 The workout slice does not advertise `Idempotency-Key`: durable replay middleware is not available yet. Creating a workout, exercise, or set after an ambiguous transport failure requires a refetch before retrying. Workout completion is instead state-idempotent under a row lock: the first valid request performs the transition, while any concurrent or later request against that already completed owned workout returns the unchanged current aggregate without repeating derived effects. The initial transition still requires the current root ETag.
 
-When durable replay is introduced for later business slices, it is intended for operations such as:
+When durable replay is introduced, it remains useful for operations such as:
 
-- create a body measurement or wellness entry;
 - send or retry a coach message;
-- generate or regenerate a weekly report;
 - confirm or reject an AI recommendation.
+
+Weekly report POST is state-idempotent by period under a per-user lock: it returns an existing current ready report unchanged and only creates a replacement when current is stale. This protects deterministic report retries without claiming transport replay for arbitrary request bodies.
 
 The future mechanism must scope keys by authenticated user, method, and canonical path, bind them to a canonical request hash, and handle completed replay and simultaneous processing. It must not be approximated with process memory.
 
@@ -266,7 +266,7 @@ Create defaults to `status: in_progress`; `started_at` defaults to the server cl
 
 or a non-empty ad-hoc `name` with `program_day_id: null`. Program-day creation copies the program/day identity, program version, ordered exercise-name and tracking-capability snapshots, rest targets, prescriptions, and planned target sets. Later program or exercise edits cannot modify those snapshots.
 
-PATCH permits `planned -> in_progress|cancelled` and `in_progress -> cancelled`; only the completion endpoint can enter `completed`. A completed workout remains completed but its timestamps, scores, comment, pain/discomfort fields, exercises, and sets may be corrected directly with the current ETag. In the current slice dynamic metrics immediately reflect those source-set corrections and the workout version increments once. Once record/report/audit modules are implemented, their narrow ports must join the same transaction to recalculate affected projections, mark old/new periods stale, and append minimized audit metadata. Cancelled workouts are immutable except for explicit deletion. DELETE is explicitly allowed for an owned workout in any status and cascades its children; future rebuildable projections and affected reports must be handled in the same transaction once their modules exist.
+PATCH permits `planned -> in_progress|cancelled` and `in_progress -> cancelled`; only the completion endpoint can enter `completed`. A completed workout remains completed but its timestamps, scores, comment, pain/discomfort fields, exercises, and sets may be corrected directly with the current ETag. Dynamic metrics immediately reflect corrections; the workout version increments once, personal records are rebuilt, and affected current reports are staled in the same transaction. Cancelled workouts are immutable except for explicit deletion. DELETE is allowed for an owned workout in any status and cascades children; completed deletion performs the same projection/report coordination.
 
 Starting an explicit or default `in_progress` workout, or moving a planned workout to `in_progress`, while another is active returns `409 workout_already_in_progress`; the backend never merges or cancels one implicitly.
 
@@ -324,19 +324,18 @@ The response is `text/csv; charset=utf-8` with `Content-Disposition: attachment`
 
 | Method | Route | Behavior |
 |---|---|---|
-| `GET`, `POST` | `/body-measurements` | range-filtered cursor list / create event (`201`, `Idempotency-Key` required) |
-| `GET`, `PATCH`, `DELETE` | `/body-measurements/{measurement_id}` | GET returns item ETag; PATCH/DELETE require `If-Match` |
+| `GET`, `POST` | `/measurements` | range-filtered cursor list / create event (`201`) |
+| `PATCH`, `DELETE` | `/measurements/{id}` | correct and return the item / delete it; both require its `If-Match` |
 
-Filters: `from`, `to`, `metric`, and cursor. Requests use the canonical fields listed in `database-schema.md` and require at least one numeric measurement. The server, not the client, determines ownership/source policy. Create/update/delete whose old or new `measured_at` falls in a generated report period marks every affected current report stale atomically.
+Filters are UTC `from`, UTC `to`, `limit`, and `cursor`; ranges are half-open and at most two years. Requests require explicit UTC `measured_at` and at least one of `weight_kg`, chest/waist/hips/neck, left/right upper arm, left/right thigh, or body-fat percent. Notes are optional but do not satisfy numeric presence. The server determines owner and `source=manual`. Rows expose `version`; ETags are `"measurement:{id}:{version}"`. Create/update/delete whose old or new instant falls in a current ready report period marks that report stale in the same transaction. Foreign IDs appear absent.
 
 ### 10.2 Daily wellness
 
 | Method | Route | Behavior |
 |---|---|---|
-| `GET`, `POST` | `/daily-wellness` | bounded range list / create (`201`, `Idempotency-Key` required) |
-| `GET`, `PATCH`, `DELETE` | `/daily-wellness/{entry_id}` | GET returns item ETag; PATCH/DELETE require `If-Match` |
+| `GET`, `POST` | `/wellness` | bounded range/cursor list / create daily entry (`201`) |
 
-Create supplies `observed_at` as a UTC instant plus wellness values. The backend uses the current profile IANA zone to calculate the first valid instant of that local civil day, stores it as `day_start_at`, and stores the zone as `timezone_at_entry`; neither boundary nor zone is client authority. Uniqueness conflict returns `409 wellness_already_exists`. A convenience query `GET /daily-wellness?from=&to=` uses stored UTC boundaries. Create/update/delete marks every current report covering the old or new stored day boundary stale atomically.
+Create supplies UTC `observed_at` and at least one of sleep minutes, sleep quality `1..5`, energy `1..5`, steps, daily calories/macronutrients, or non-empty notes. Values are aggregates, not meals. The backend derives and stores the first real instant of that civil day from the current profile IANA zone; neither boundary nor zone is client authority. Duplicate local day returns `409 wellness_already_exists`. GET filters original observations with `from`, `to`, `limit`, and cursor. The requested v1 surface intentionally has no wellness PATCH/DELETE routes.
 
 ## 11. Progress module
 
@@ -344,49 +343,46 @@ Progress endpoints are read-only derived views. They never accept client writes 
 
 | Method | Route | Key query parameters |
 |---|---|---|
-| `GET` | `/progress/summary` | `from`, `to` |
-| `GET` | `/progress/body` | `metric=weight_kg|body_fat_percent|neck_cm|chest_cm|waist_cm|hips_cm|left_upper_arm_cm|right_upper_arm_cm|left_thigh_cm|right_thigh_cm|left_calf_cm|right_calf_cm`, `from`, `to`, `granularity` |
-| `GET` | `/progress/training-volume` | `metric=volume|working_sets|repetitions`, `from`, `to`, `granularity`, optional program/exercise |
-| `GET` | `/progress/exercises/{exercise_id}` | `metric=e1rm|volume|max_weight|reps`, `from`, `to`, `granularity` |
-| `GET` | `/progress/personal-records` | `exercise_id`, `record_type`, `from`, `to`, cursor |
-| `GET` | `/progress/personal-records/{record_id}` | source set/workout link and calculation metadata |
+| `GET` | `/progress/dashboard` | no query parameters; current profile-local week and current UTC instant |
+| `GET` | `/progress/weight` | optional UTC `from`, `to`; defaults to trailing 30 days, maximum two years |
+| `GET` | `/progress/exercises/{exerciseId}` | optional UTC `from`, `to`; defaults to trailing 365 days, maximum two years |
+| `GET` | `/progress/personal-records` | optional `exercise_id`, `record_type`, UTC `from`, `to`, `limit<=100` |
 
-Series response data has `metric`, `unit`, `from`, `to`, `granularity`, and bounded `points: [{ "at": ..., "value": ... }]`. Every deterministic calculation, especially estimated 1RM, exposes a `calculation_version`. No interpolation occurs across missing periods unless a representation explicitly marks generated empty buckets.
+Dashboard returns current mass, 7/30-day changes, trailing 7-day average, current-week workout count/volume, all-time volume, consecutive active local-week streak, PR discoveries in the current week, and earliest future scheduled planned workout. A streak may end in the previous week if the current week has no completed workout. Weight points include a trailing `(at-7 days, at]` average. Exercise points aggregate each completed workout and include working sets, repetitions, volume, max load, and eligible Epley e1RM. Empty arrays and nullable insufficient-data values are explicit; no interpolation occurs.
+
+PR projection replays completed non-warmup source sets chronologically after every completed-workout completion/correction/deletion. Strict improvements create auditable discoveries for max weight, max set volume, max Epley e1RM, and max repetitions independently for each exact saved weight. Current-list results choose the best discovery for each key and include source workout/set, unit, formula/calculation version, and saved weight for `max_reps`.
 
 ## 12. Report module
 
 | Method | Route | Behavior |
 |---|---|---|
-| `GET` | `/reports/weekly` | current reports by default; cursor list; filters `from`, `to`, `status`, `include_revisions` |
-| `POST` | `/reports/weekly` | request generation; `Idempotency-Key` required; `202` pending revision |
-| `GET` | `/reports/weekly/{report_id}` | immutable revision; returns report ETag/status |
-| `POST` | `/reports/weekly/{report_id}/regenerate` | create next revision from the current terminal revision only; `Idempotency-Key` + report `If-Match`; `202`, otherwise `409` |
+| `POST` | `/reports/weekly` | synchronously generate a deterministic current ready revision (`201`) or return unchanged existing ready (`200`) |
+| `GET` | `/reports` | current reports by default; filters `from`, `to`, `status=ready|stale`, `include_revisions`, `limit<=100` |
+| `GET` | `/reports/{id}` | owner-scoped immutable revision metrics and mutable current/status/version metadata; returns ETag |
 
 Generate request:
 
 ```json
 {
-  "week_containing_at": "2026-07-29T12:00:00Z",
-  "include_ai_insight": true
+  "week_containing_at": "2026-07-29T12:00:00Z"
 }
 ```
 
-The backend derives `[period_start_at, period_end_at)` from the user's current IANA zone and stores that zone. Ordinary generate returns the existing `pending`, `generating`, or `ready` current report for the same period (`202` while pending/generating, `200` when ready). A current `failed` or `stale` report requires regenerate. Regenerate is allowed for current terminal `ready`, `failed`, or `stale` and always inserts a new `pending` revision; transient runner retries stay on that pending revision until attempts are exhausted.
+The body may be empty to select the current week. The backend derives Monday-based `[period_start_at, period_end_at)` from the profile IANA zone and stores its UTC boundaries/zone. Future weeks are rejected. Generation is manually requested, bounded, deterministic, and synchronous—there is no fake pending job or runner. It locks the user coordination row, establishes `input_data_through_at` after obtaining that lock, then reads all source facts in the same transaction before inserting the revision directly as `ready` with `ai_insight_status=not_requested`. The transaction is `READ COMMITTED` by design: if its lock waited for a source writer, the cutoff and subsequent reads see that committed write; while it owns the lock, all supported source writers are fenced, yielding one stable logical snapshot. An existing current ready artifact is returned unchanged. If current is stale, POST builds revision+1, retains the old artifact, and atomically switches the current marker.
 
-First generation has no prior artifact, so its pending row is current. During regeneration, the prior artifact remains current while the replacement pending revision is returned directly and shown as replacement work. Only when replacement reaches `ready` does one transaction switch `is_current`; a failed replacement cannot hide the previous usable report.
-
-The runner captures `input_data_through_at` and all deterministic aggregates in one short `REPEATABLE READ` database transaction, then commits the metric snapshot. Optional narrative insight runs afterward and receives only a specialized safe backend-context projection of the stored deterministic metrics, never live/raw training rows. Any later workout completion/direct correction/deletion or body/wellness create/update/delete affecting the interval marks the current ready report `stale`.
-
-Report fields include UTC period bounds, zone, revision/current flag, generation status, deterministic `metrics` with schema version and input cutoff, attempt/retry metadata (`retryable`, optional `next_attempt_at`), AI insight/status, model/prompt version, error code, generated instant, and links to relevant progress/history filters. Metrics may be ready even when `ai_insight_status = "failed"`.
+Any later completed-workout completion/correction/deletion or measurement/wellness creation affecting the interval marks the current ready report stale. Report fields include UTC bounds, zone, revision/current marker, status, deterministic metrics/cutoff, AI status, generated instant, and version. No OpenAI call occurs in this module at this stage.
 
 Initial `metrics_schema_version = 1` has a closed object containing:
 
 - `totals`: `completed_workouts`, `working_sets`, `repetitions`, `volume_kg`;
 - `exercise_summaries[]`: exercise ID/name snapshot, working sets, repetitions, volume, max weight, optional calculation-versioned estimated 1RM/change;
-- `personal_records[]`: record ID/type/value/unit, exercise and achieved instant;
-- `body`: sample counts and optional start/end/change for weight/body metrics (null plus coverage when insufficient);
-- `wellness`: days logged/expected and optional averages for sleep, quality, energy, stress, soreness and mood;
-- `coverage`: source cutoff and explicit missing/insufficient-data flags.
+- `previous_week`: prior workout/volume totals plus absolute and nullable percentage change;
+- `new_records[]`: record/source/type/value/unit/weight/formula metadata discovered in the report interval;
+- `weight`: sample count and optional first/last/change;
+- `wellness`: entries, optional average sleep/quality/energy and aggregate activity/nutrition;
+- `pain_messages[]`: source workout/time and saved discomfort/comment for workouts marked painful;
+- `aggregated`: training days, exercise count, average difficulty, steps and nutrition averages;
+- `coverage`: cutoff and explicit body/wellness/workout availability flags.
 
 Unknown metrics fields are rejected by the versioned backend schema when writing. Narrative insight may quote/explain this object but cannot change it.
 
@@ -473,7 +469,7 @@ Any confirm of an already `applied` recommendation by the same owner with the sa
 | Workout | create as `planned|in_progress`; `planned -> in_progress|cancelled`; `in_progress -> completed` through complete or `cancelled` through PATCH; `completed` remains directly correctable; cancelled tree is immutable; any status may be deleted |
 | Assistant message | `pending -> processing -> completed|failed`; `failed -> pending` explicit retry; fenced `processing -> pending` lease recovery; pending/processing -> `cancelled` on archive/AI disable/account disable-delete |
 | Recommendation | `proposed -> applied|rejected|expired|superseded` |
-| Weekly report revision | `pending -> generating -> ready|failed`; fenced `generating -> pending` transient retry/lease recovery; `ready -> stale` after any affecting source mutation |
+| Weekly report revision | implemented generation inserts `ready`; `ready -> stale`; POST on stale creates a new `ready` revision. Pending/generating/failed states are reserved for a future asynchronous extension |
 | AI insight | `not_requested|pending -> ready|failed` |
 
 Invalid transitions return `409`; invalid field values return `422`.
@@ -493,7 +489,6 @@ Invalid transitions return `409`; invalid field values return `422`.
 | AI disabled/notice stale at admission | `409 ai_coach_disabled` / `ai_notice_outdated` |
 | Proposal digest differs | `409 proposal_hash_mismatch` |
 | Proposal expired/rejected/superseded/stale program | `409 recommendation_expired` / `recommendation_rejected` / `recommendation_superseded` / `recommendation_stale` |
-| Regenerate a non-current or non-terminal report | `409 report_not_current` / `report_not_regeneratable` |
 | Idempotency key processing/reused with other body | `409 idempotency_in_progress` / `idempotency_key_reused` |
 | Aggregate ETag missing/stale | `428 precondition_required` / `412 precondition_failed` |
 

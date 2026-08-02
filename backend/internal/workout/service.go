@@ -21,20 +21,48 @@ type ExerciseSnapshotter interface {
 	SnapshotForWorkout(context.Context, pgx.Tx, string, string, bool) (exercise.WorkoutSnapshot, error)
 }
 
+type PersonalRecordUpdater interface {
+	RebuildUser(context.Context, pgx.Tx, string, time.Time) error
+}
+
+type ReportSourceCoordinator interface {
+	LockUser(context.Context, pgx.Tx, string) error
+	MarkPeriodsStale(context.Context, pgx.Tx, string, []time.Time, time.Time) error
+}
+
 type Service struct {
 	pool       *pgxpool.Pool
 	repository *Repository
 	programs   ProgramSnapshotter
 	exercises  ExerciseSnapshotter
+	records    PersonalRecordUpdater
+	reports    ReportSourceCoordinator
 	now        func() time.Time
 	newID      func() (string, error)
 }
 
-func NewService(pool *pgxpool.Pool, repository *Repository, programs ProgramSnapshotter, exercises ExerciseSnapshotter) *Service {
+func NewService(pool *pgxpool.Pool, repository *Repository, programs ProgramSnapshotter, exercises ExerciseSnapshotter, records PersonalRecordUpdater, reports ReportSourceCoordinator) *Service {
 	return &Service{
-		pool: pool, repository: repository, programs: programs, exercises: exercises,
+		pool: pool, repository: repository, programs: programs, exercises: exercises, records: records, reports: reports,
 		now: time.Now, newID: id.UUID,
 	}
+}
+
+func (s *Service) refreshDerived(ctx context.Context, tx pgx.Tx, actorID string, instants []time.Time, now time.Time) error {
+	if s.records == nil || s.reports == nil {
+		return errors.New("workout derived-data ports are not configured")
+	}
+	if err := s.records.RebuildUser(ctx, tx, actorID, now); err != nil {
+		return err
+	}
+	return s.reports.MarkPeriodsStale(ctx, tx, actorID, instants, now)
+}
+
+func workoutInstants(value Workout) []time.Time {
+	if value.StartedAt == nil {
+		return nil
+	}
+	return []time.Time{*value.StartedAt}
 }
 
 func (s *Service) Create(ctx context.Context, actorID string, input CreateInput) (Workout, error) {
@@ -157,6 +185,13 @@ func (s *Service) Patch(ctx context.Context, actorID, workoutID string, expected
 		if value.Status == "cancelled" {
 			return ErrInvalidState
 		}
+		wasCompleted := value.Status == "completed"
+		oldInstants := workoutInstants(value)
+		if wasCompleted {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
+		}
 		if err := applyWorkoutPatch(&value, input, now); err != nil {
 			return err
 		}
@@ -167,7 +202,13 @@ func (s *Service) Patch(ctx context.Context, actorID, workoutID string, expected
 		if err := validateWorkoutTimes(value, minimum, maximum); err != nil {
 			return err
 		}
-		return s.repository.UpdateRoot(ctx, tx, actorID, value, expectedVersion, now)
+		if err := s.repository.UpdateRoot(ctx, tx, actorID, value, expectedVersion, now); err != nil {
+			return err
+		}
+		if wasCompleted {
+			return s.refreshDerived(ctx, tx, actorID, append(oldInstants, workoutInstants(value)...), now)
+		}
+		return nil
 	})
 	if err != nil {
 		return Workout{}, err
@@ -247,6 +288,9 @@ func (s *Service) Complete(ctx context.Context, actorID, workoutID string, expec
 		if value.Status != "in_progress" || value.StartedAt == nil {
 			return ErrInvalidState
 		}
+		if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+			return err
+		}
 		completedAt := now
 		if input.CompletedAt.Set {
 			completedAt = input.CompletedAt.Value.UTC()
@@ -273,7 +317,10 @@ func (s *Service) Complete(ctx context.Context, actorID, workoutID string, expec
 		if err := s.repository.MarkRemainingSetsSkipped(ctx, tx, actorID, workoutID, now); err != nil {
 			return err
 		}
-		return s.repository.UpdateRoot(ctx, tx, actorID, value, expectedVersion, now)
+		if err := s.repository.UpdateRoot(ctx, tx, actorID, value, expectedVersion, now); err != nil {
+			return err
+		}
+		return s.refreshDerived(ctx, tx, actorID, workoutInstants(value), now)
 	})
 	if err != nil {
 		return Workout{}, err
@@ -290,7 +337,21 @@ func (s *Service) Delete(ctx context.Context, actorID, workoutID string, expecte
 		if value.Version != expectedVersion {
 			return ErrVersionConflict
 		}
-		return s.repository.Delete(ctx, tx, actorID, workoutID)
+		if value.Status != "completed" {
+			return s.repository.Delete(ctx, tx, actorID, workoutID)
+		}
+		if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+			return err
+		}
+		instants, err := s.repository.PerformedInstants(ctx, tx, actorID, workoutID, "")
+		if err != nil {
+			return err
+		}
+		instants = append(instants, workoutInstants(value)...)
+		if err := s.repository.Delete(ctx, tx, actorID, workoutID); err != nil {
+			return err
+		}
+		return s.refreshDerived(ctx, tx, actorID, instants, s.now().UTC())
 	})
 }
 
@@ -310,6 +371,12 @@ func (s *Service) AddExercise(ctx context.Context, actorID, workoutID string, ex
 		}
 		if root.Status == "cancelled" {
 			return ErrInvalidState
+		}
+		completed := root.Status == "completed"
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
 		}
 		count, err := s.repository.ExerciseCount(ctx, tx, actorID, workoutID)
 		if err != nil {
@@ -352,7 +419,13 @@ func (s *Service) AddExercise(ctx context.Context, actorID, workoutID string, ex
 		if err := s.repository.InsertExercise(ctx, tx, actorID, result, now); err != nil {
 			return err
 		}
-		return s.repository.Touch(ctx, tx, actorID, workoutID, expectedVersion, now)
+		if err := s.repository.Touch(ctx, tx, actorID, workoutID, expectedVersion, now); err != nil {
+			return err
+		}
+		if completed {
+			return s.refreshDerived(ctx, tx, actorID, workoutInstants(root), now)
+		}
+		return nil
 	})
 	if err != nil {
 		return WorkoutExercise{}, 0, err
@@ -382,6 +455,12 @@ func (s *Service) PatchExercise(ctx context.Context, actorID, itemID, expectedWo
 		if root.Status == "cancelled" {
 			return ErrInvalidState
 		}
+		completed := root.Status == "completed"
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
+		}
 		if input.Position.Set {
 			count, err := s.repository.ExerciseCount(ctx, tx, actorID, root.ID)
 			if err != nil {
@@ -403,6 +482,11 @@ func (s *Service) PatchExercise(ctx context.Context, actorID, itemID, expectedWo
 		}
 		if err := s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now); err != nil {
 			return err
+		}
+		if completed {
+			if err := s.refreshDerived(ctx, tx, actorID, workoutInstants(root), now); err != nil {
+				return err
+			}
 		}
 		result = item
 		return nil
@@ -430,10 +514,28 @@ func (s *Service) DeleteExercise(ctx context.Context, actorID, itemID, expectedW
 		if root.Status == "cancelled" {
 			return ErrInvalidState
 		}
+		completed := root.Status == "completed"
+		var instants []time.Time
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
+			instants, err = s.repository.PerformedInstants(ctx, tx, actorID, root.ID, item.ID)
+			if err != nil {
+				return err
+			}
+			instants = append(instants, workoutInstants(root)...)
+		}
 		if err := s.repository.DeleteExercise(ctx, tx, actorID, item); err != nil {
 			return err
 		}
-		return s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now)
+		if err := s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now); err != nil {
+			return err
+		}
+		if completed {
+			return s.refreshDerived(ctx, tx, actorID, instants, now)
+		}
+		return nil
 	})
 	return expectedVersion + 1, err
 }
@@ -454,6 +556,12 @@ func (s *Service) AddSet(ctx context.Context, actorID, itemID, expectedWorkoutID
 		}
 		if root.Status != "in_progress" && root.Status != "completed" {
 			return ErrInvalidState
+		}
+		completed := root.Status == "completed"
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
 		}
 		normalized, err := normalizeSetCreate(input, item, now)
 		if err != nil {
@@ -494,7 +602,17 @@ func (s *Service) AddSet(ctx context.Context, actorID, itemID, expectedWorkoutID
 		if err := s.repository.InsertCompletedSet(ctx, tx, actorID, result, now); err != nil {
 			return err
 		}
-		return s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now)
+		if err := s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now); err != nil {
+			return err
+		}
+		if completed {
+			instants := workoutInstants(root)
+			if result.PerformedAt != nil {
+				instants = append(instants, *result.PerformedAt)
+			}
+			return s.refreshDerived(ctx, tx, actorID, instants, now)
+		}
+		return nil
 	})
 	if err != nil {
 		return WorkoutSet{}, 0, err
@@ -524,6 +642,13 @@ func (s *Service) PatchSet(ctx context.Context, actorID, setID, expectedWorkoutI
 		}
 		if root.Status == "cancelled" {
 			return ErrInvalidState
+		}
+		completed := root.Status == "completed"
+		oldPerformedAt := set.PerformedAt
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
 		}
 		if err := applySetPatch(&set, input, now); err != nil {
 			return err
@@ -573,6 +698,18 @@ func (s *Service) PatchSet(ctx context.Context, actorID, setID, expectedWorkoutI
 		}
 		if err := s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now); err != nil {
 			return err
+		}
+		if completed {
+			instants := workoutInstants(root)
+			if oldPerformedAt != nil {
+				instants = append(instants, *oldPerformedAt)
+			}
+			if set.PerformedAt != nil {
+				instants = append(instants, *set.PerformedAt)
+			}
+			if err := s.refreshDerived(ctx, tx, actorID, instants, now); err != nil {
+				return err
+			}
 		}
 		result = set
 		return nil
@@ -633,10 +770,26 @@ func (s *Service) DeleteSet(ctx context.Context, actorID, setID, expectedWorkout
 		if root.Status == "cancelled" {
 			return ErrInvalidState
 		}
+		completed := root.Status == "completed"
+		if completed {
+			if err := s.reports.LockUser(ctx, tx, actorID); err != nil {
+				return err
+			}
+		}
 		if err := s.repository.DeleteSet(ctx, tx, actorID, set); err != nil {
 			return err
 		}
-		return s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now)
+		if err := s.repository.Touch(ctx, tx, actorID, root.ID, expectedVersion, now); err != nil {
+			return err
+		}
+		if completed {
+			instants := workoutInstants(root)
+			if set.PerformedAt != nil {
+				instants = append(instants, *set.PerformedAt)
+			}
+			return s.refreshDerived(ctx, tx, actorID, instants, now)
+		}
+		return nil
 	})
 	return expectedVersion + 1, err
 }

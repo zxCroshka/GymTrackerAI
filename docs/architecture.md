@@ -1,6 +1,6 @@
 # GymTracker AI architecture
 
-Status: implemented baseline through backend exercise/program stage; later slices remain proposed
+Status: implemented backend baseline through measurement/progress/report; frontend product slices and AI remain proposed
 
 Last updated: 2026-08-02
 
@@ -31,14 +31,14 @@ flowchart LR
 The implemented Compose topology is:
 
 - `frontend`: Next.js application;
-- `backend`: Go application that will contain all nine business modules and a lightweight internal pending-work runner;
+- `backend`: Go application containing the implemented modular-monolith slices; a lightweight pending-work runner is deferred until coach/AI work requires it;
 - `postgres`: PostgreSQL with a persistent named volume;
 - `migrate`: one-shot deployment task that applies numbered `golang-migrate` files once before backend startup;
 - `db-seed`: opt-in `tools` profile task for the reviewed system exercise catalogue.
 
 `migrate` and `db-seed` are lifecycle tasks built from the same backend repository, not long-running services or module boundaries. API replicas never run migrations themselves, which prevents concurrent startup migration races.
 
-This remains a modular monolith. The pending-work runner is part of the same codebase/process and calls the same application services; it is not a separate service boundary. Multiple `api` replicas may be introduced later only if PostgreSQL row locking/advisory locking prevents duplicate work.
+This remains a modular monolith. If a pending-work runner is added, it stays in the same codebase/process and calls the same application services; it is not a separate service boundary. Multiple `api` replicas may be introduced later only with database-backed coordination.
 
 No broker, cache, object store, search service, analytics database, or service mesh is justified for the initial requirements. Add one only after a measured bottleneck and documented decision.
 
@@ -100,7 +100,7 @@ An arrow means “uses a small public application/query port,” not permission 
 | `workout` | Workout aggregate, exercise snapshots, performed sets, lifecycle | Plan/start/edit/complete/cancel/correct/delete; history queries and CSV export | Derive arbitrary analytics in HTTP handlers |
 | `measurement` | Body measurements and daily wellness | CRUD and bounded history queries | Generate coach text or weekly reports |
 | `progress` | Personal records and deterministic progress calculations | Recalculate records; return bounded aggregate series | Accept manual record writes or call OpenAI |
-| `report` | Versioned weekly report snapshots and generation state | Request/generate/retry/read reports; optionally generate narrative from stored metrics | Treat AI narrative as source metrics or import coach internals |
+| `report` | Versioned weekly report snapshots and generation state | Synchronously generate/read deterministic revisions; later optionally generate narrative from stored metrics | Treat AI narrative as source metrics or import coach internals |
 | `coach` | Conversations, messages, typed recommendations, coach OpenAI orchestration/tool registry | Send/process messages; safe tools; confirm/reject recommendations | Read arbitrary tables or mutate a program before confirmation |
 
 ### 4.4 Cross-module workflows
@@ -111,9 +111,9 @@ Cross-module workflows use an application coordinator and one shared pgx transac
 - **Profile import:** `user` owns strict profile/notes validation and calls the narrow `measurement` initial-write port through composition-root wiring; profile, notes, and optional first measurement commit atomically.
 - **Program write/activation:** `program` owns one transaction and calls only the narrow `exercise.IsUsable(ctx, tx, actor, exercise)` port. The check locks each visible non-archived exercise against concurrent archival until the program transaction commits; `program` never imports exercise persistence internals.
 - **Start from program:** `workout` asks `program` for an authorized prescription snapshot and `exercise` for visible metadata, then owns the copied workout rows. These narrow snapshot reads use shared row locks that conflict with the source modules' versioned update/archive locks, so one workout transaction copies a wholly old or wholly new source tree rather than mixed metadata.
-- **Complete/correct workout:** `workout` validates and completes the aggregate transactionally. A later authenticated PATCH or child mutation on an owned completed workout is the explicit correction workflow selected for the implemented API; it preserves `completed` status, increments the root version once, and must invoke `progress` recalculation and `report` staleness ports once those projections are implemented.
+- **Complete/correct workout:** `workout` validates and completes the aggregate transactionally. A later authenticated PATCH or child mutation on an owned completed workout preserves `completed` status and increments the root version once. The implemented narrow ports rebuild auditable personal-record discoveries and stale every current report covering the workout or changed performed-set instant in that same transaction.
 - **Source measurement/wellness mutation:** `measurement` changes the owned row and marks every current report covering the event/day before or after the mutation stale in the same transaction.
-- **Generate report:** `report` captures one `REPEATABLE READ` snapshot/cutoff, gets bounded deterministic aggregates through `workout`, `measurement`, and `progress` query ports, and commits an immutable metric snapshot. It then optionally sends only a specialized safe backend-context projection of those stored metrics to its narrative-generator port. When the second OpenAI use is implemented, only redacted HTTP/auth transport is shared under `platform/openai`; report prompting remains in `report`, so `report` and `coach` do not depend on one another.
+- **Generate report:** `report` serializes with source mutation by locking the user's coordination row, establishes the cutoff only after obtaining that lock, gets bounded deterministic aggregates through `workout`, `measurement`, and `progress` query ports, and immediately commits a `ready` immutable revision. Its transaction uses `READ COMMITTED` intentionally: reads after a waited lock see the preceding writer, while the held lock fences every supported source mutation until all aggregates commit. A current ready artifact is returned unchanged; a stale artifact is superseded by a new current revision. A later AI narrative may receive only a specialized safe projection of the stored metrics.
 - **Confirm recommendation:** `coach` locks and validates the recommendation; `program` validates and applies the typed command against the base version; `coach` marks it applied in the same transaction.
 
 In-process notifications are allowed after commit for non-critical wakeups, but correctness cannot depend on an in-memory event surviving a crash. Durable `pending`/`stale` rows in PostgreSQL are the recovery mechanism.
@@ -155,7 +155,7 @@ The browser does not persist access tokens in local storage. After a page reload
 - Successful responses use a consistent `{ "data": ..., "meta": ... }` envelope; errors use `application/problem+json` compatible with RFC 9457.
 - Cursor pagination is used for growing collections. Chart and tool queries are aggregated and range-bounded.
 - Durable `Idempotency-Key` replay is a later platform capability for high-risk/retry-prone business POSTs; implemented program activation uses a transaction plus ETag, and duplicate requires client reconciliation after an ambiguous failure.
-- Program, workout, profile/AI settings, custom-exercise, body-measurement, wellness, conversation, recommendation, and report mutations use ETags/`If-Match` where lost updates matter.
+- Implemented mutable program, workout, profile, custom-exercise, and body-measurement resources use ETags/`If-Match` where lost updates matter. Future mutable wellness, AI-settings, conversation, recommendation, and report operations must follow the same rule when added.
 - Unknown JSON fields and multiple JSON values are rejected; body size and request deadlines are route-specific.
 - OpenAPI is committed and synchronized with implemented transport behavior; stronger lint/breaking-change automation can be added without changing module boundaries.
 
@@ -183,7 +183,7 @@ Server Components provide layout and non-secret static content. Interactive/priv
 
 ## 10. Asynchronous work without microservices
 
-Coach messages and weekly reports can exceed a normal interactive request deadline. Their create endpoints persist `pending` state and return `202`. A lightweight runner inside the Go monolith:
+The implemented deterministic weekly aggregation is bounded and synchronous; it does not introduce a runner or pretend that queued work exists. Future coach messages and optional report narrative can exceed an interactive deadline. When either is implemented, a lightweight runner inside the Go monolith will:
 
 1. selects eligible rows with `FOR UPDATE SKIP LOCKED`;
 2. records a fresh processing-attempt UUID/fencing token, lease expiry, attempt metadata, and moves them to `processing`/`generating`;
@@ -191,7 +191,7 @@ Coach messages and weekly reports can exceed a normal interactive request deadli
 4. stores completed or failed results only when the row still has the same attempt token; a reclaimed/disabled/archived job makes a late worker's write fail;
 5. resumes pending/stuck work after restart using leases/attempt timestamps.
 
-The frontend polls resource status with bounded backoff. Server-Sent Events may be added later for UX, but correctness and the first API version do not require them. No WebSocket, broker, or standalone worker service is planned.
+The frontend will poll those future asynchronous resources with bounded backoff. No WebSocket, broker, or standalone worker service is planned.
 
 The original JWT is not retained for asynchronous work. At admission the owner is written only from verified request context. Before each provider/tool call, the runner reconstructs an execution principal from that trusted tenant-safe row and rechecks active user, enabled AI setting/notice, active conversation, and current fencing token. Archiving a conversation, disabling AI, or deleting/disabling the account invalidates leases/cancels pending work; no further tools/provider calls or late result writes are allowed.
 
@@ -222,13 +222,13 @@ Relevant official references:
 - SQL is explicit and parameterized. A query generator may be proposed later only if it supports Go 1.22.2 and demonstrably reduces risk without hiding SQL ownership.
 - `golang-migrate` owns forward and down migration files once implementation begins. Migrations are reviewed for locking/backfill behavior and run separately before application startup in production.
 - Database checks, foreign keys, unique/partial indexes, and optimistic versions enforce documented invariants.
-- Transaction isolation defaults to `READ COMMITTED` with row locks for aggregate mutations. Activation, token rotation, recommendation confirmation, report revisioning, and record recalculation lock the relevant rows; use stronger isolation only for a demonstrated anomaly.
+- Transaction isolation defaults to `READ COMMITTED` with row locks for aggregate mutations. Report-source mutations and report generation share a per-user row lock; this lock, rather than an early repeatable-read snapshot, fences source changes while report queries run and lets a waiter see the preceding commit. Activation, token rotation, recommendation confirmation, report revisioning, and record recalculation lock the relevant rows.
 - No distributed transaction is needed. OpenAI calls are never made while holding a database transaction open.
 
 ## 13. Reliability and degradation
 
 - OpenAI failure does not block auth, programs, workouts, measurements, progress, or deterministic report metrics.
-- Coach/report failures store a safe error code and retry metadata; raw provider errors are not shown to users or logged with prompt data.
+- Future asynchronous coach/report-insight failures store a safe error code and retry metadata; raw provider errors are not shown to users or logged with prompt data. Synchronous deterministic report failures return a safe problem and do not create a misleading failed artifact.
 - HTTP handlers use deadlines and propagate cancellation to pgx/OpenAI.
 - State-changing operations are transactional and safe to retry through idempotency records or state/version checks.
 - Graceful shutdown stops accepting requests, completes bounded in-flight work, releases work leases, and closes the pgx pool.
@@ -251,7 +251,9 @@ Metrics should cover request latency/error rates, pgx pool pressure/query durati
 | Access token storage | Browser memory; refresh token HttpOnly cookie | Reduces token theft persistence/CSRF surface; reload needs refresh bootstrap and private SSR is limited |
 | Canonical units | kg/cm in DB and API | Simple analytics; clients must correctly convert and label imperial input/output |
 | Program editing API | Full aggregate tree on create and optional PATCH replacement | Fewer routes and atomic ordering validation; larger payloads and fresh child UUIDs require editor refetch after save |
-| Completed workout corrections | Direct versioned PATCH/child mutations retain `completed` status | Matches the requested compact API and avoids a synthetic reopen/start cycle; future PR/report projections must recalculate or become stale atomically |
+| Completed workout corrections | Direct versioned PATCH/child mutations retain `completed` status | Matches the compact API and avoids a synthetic reopen/start cycle; implemented PR rebuild and report staleness add write cost to completed-data corrections |
+| Daily nutrition scope | One aggregate kcal/macronutrient snapshot in wellness | Supports requested weekly signals without introducing foods/meals or pretending to be a nutrition planner |
+| Deterministic report execution | Synchronous bounded `READ COMMITTED` transaction under the shared source lock | Prevents an early snapshot from missing a writer that held the lock; no queue/runner complexity now, but request latency grows with the bounded aggregate query |
 | AI context | `store: false`, app-managed bounded context | Better data minimization/control; more token/context engineering and no reliance on provider conversation persistence |
 | AI tool sequencing | Disable parallel calls initially | Easier auditing/rate control; potentially higher coach latency |
 | Analytics | Query-time aggregates plus persisted PR/report snapshots | Avoids warehouse complexity; indexes and bounded ranges are essential as history grows |

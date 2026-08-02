@@ -577,6 +577,36 @@ func (r *Repository) PerformedRange(ctx context.Context, tx pgx.Tx, actorID, wor
 	return utcTime(minimum), utcTime(maximum), nil
 }
 
+func (r *Repository) PerformedInstants(ctx context.Context, tx pgx.Tx, actorID, workoutID, workoutExerciseID string) ([]time.Time, error) {
+	statement := `
+		SELECT set.completed_at
+		FROM workout_sets AS set
+		JOIN workout_exercises AS item ON item.id=set.workout_exercise_id AND item.user_id=set.user_id
+		WHERE item.workout_id=$1 AND item.user_id=$2 AND set.completed_at IS NOT NULL`
+	args := []any{workoutID, actorID}
+	if workoutExerciseID != "" {
+		statement += ` AND item.id=$3`
+		args = append(args, workoutExerciseID)
+	}
+	rows, err := tx.Query(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list workout performed instants: %w", err)
+	}
+	defer rows.Close()
+	result := []time.Time{}
+	for rows.Next() {
+		var value time.Time
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan performed instant: %w", err)
+		}
+		result = append(result, value.UTC())
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate performed instants: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) PreviousResult(ctx context.Context, actorID, anchorID string) (*PreviousResult, error) {
 	var exerciseID, currentWorkoutID string
 	var currentEvent time.Time

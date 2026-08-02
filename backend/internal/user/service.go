@@ -113,6 +113,12 @@ func (s *Service) Get(ctx context.Context, userID string) (Profile, error) {
 	return profileFromDatabase(value), nil
 }
 
+// Timezone is the narrow calendar-settings query used by measurement,
+// progress, and report modules.
+func (s *Service) Timezone(ctx context.Context, userID string) (string, error) {
+	return s.repository.Timezone(ctx, userID)
+}
+
 func (s *Service) Patch(ctx context.Context, userID string, expectedVersion int64, input PatchInput) (Profile, error) {
 	if !patchHasFields(input) {
 		return Profile{}, ErrValidation

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: GymTracker AI API
-  version: 0.4.0
-  description: Auth, user-profile, exercise catalogue, training-program, and workout contract. All instants are UTC RFC 3339 values.
+  version: 0.5.0
+  description: Implemented backend contract through deterministic measurement, progress, and weekly reports. All instants are UTC RFC 3339 values ending in Z.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -1033,6 +1033,226 @@ paths:
           $ref: "#/components/responses/Problem"
         "428":
           $ref: "#/components/responses/Problem"
+  /measurements:
+    get:
+      tags: [measurement]
+      operationId: listMeasurements
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Owner-scoped measurements ordered newest first.
+          content: { application/json: { schema: { $ref: "#/components/schemas/BodyMeasurementCollectionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [measurement]
+      operationId: createMeasurement
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BodyMeasurementCreate" } } }
+      responses:
+        "201":
+          description: Measurement created.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/MeasurementETag" }
+          content: { application/json: { schema: { $ref: "#/components/schemas/BodyMeasurementEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /measurements/{id}:
+    parameters: [{ $ref: "#/components/parameters/ResourceID" }]
+    patch:
+      tags: [measurement]
+      operationId: updateMeasurement
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IfMatch" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BodyMeasurementPatch" } } }
+      responses:
+        "200":
+          description: Measurement corrected.
+          headers: { ETag: { $ref: "#/components/headers/MeasurementETag" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/BodyMeasurementEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "428": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [measurement]
+      operationId: deleteMeasurement
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/IfMatch" }]
+      responses:
+        "204": { description: Measurement deleted. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
+        "428": { $ref: "#/components/responses/Problem" }
+  /wellness:
+    get:
+      tags: [measurement]
+      operationId: listWellness
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Owner-scoped wellness observations ordered newest first.
+          content: { application/json: { schema: { $ref: "#/components/schemas/WellnessCollectionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [measurement]
+      operationId: createWellness
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WellnessCreate" } } }
+      responses:
+        "201":
+          description: Daily wellness entry created.
+          content: { application/json: { schema: { $ref: "#/components/schemas/WellnessEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /progress/dashboard:
+    get:
+      tags: [progress]
+      operationId: getProgressDashboard
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current deterministic dashboard.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProgressDashboardEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+  /progress/weight:
+    get:
+      tags: [progress]
+      operationId: getWeightProgress
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Body-weight points and trailing seven-day averages.
+          content: { application/json: { schema: { $ref: "#/components/schemas/WeightProgressEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /progress/exercises/{exerciseId}:
+    parameters:
+      - { name: exerciseId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [progress]
+      operationId: getExerciseProgress
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Per-completed-workout dynamics for the exercise.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ExerciseProgressEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /progress/personal-records:
+    get:
+      tags: [progress]
+      operationId: listPersonalRecords
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: exercise_id, in: query, schema: { type: string, format: uuid } }
+        - { name: record_type, in: query, schema: { $ref: "#/components/schemas/PersonalRecordType" } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Current best auditable records.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PersonalRecordCollectionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /reports/weekly:
+    post:
+      tags: [report]
+      operationId: generateWeeklyReport
+      description: Synchronous deterministic generation. Returns an existing current ready report unchanged or supersedes a stale artifact.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportGenerate" } } }
+      responses:
+        "200":
+          description: Existing current ready report.
+          headers: { ETag: { $ref: "#/components/headers/ReportETag" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } }
+        "201":
+          description: New ready revision generated.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/ReportETag" }
+          content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /reports:
+    get:
+      tags: [report]
+      operationId: listWeeklyReports
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: status, in: query, schema: { type: string, enum: [ready, stale] } }
+        - { name: include_revisions, in: query, schema: { type: boolean, default: false } }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Owner-scoped report revisions.
+          content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportCollectionEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+  /reports/{id}:
+    parameters: [{ $ref: "#/components/parameters/ResourceID" }]
+    get:
+      tags: [report]
+      operationId: getWeeklyReport
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Owned report revision.
+          headers: { ETag: { $ref: "#/components/headers/ReportETag" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/WeeklyReportEnvelope" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 components:
   securitySchemes:
     bearerAuth:
@@ -1084,6 +1304,12 @@ components:
       description: Strong validator for the workout aggregate containing the selected root, exercise, or set.
       schema: { type: string }
       example: '"workout:018f4ea8-89af-47d7-b7e3-43d94f83292e:9"'
+    MeasurementETag:
+      schema: { type: string }
+      example: '"measurement:018f4ea8-89af-47d7-b7e3-43d94f83292e:2"'
+    ReportETag:
+      schema: { type: string }
+      example: '"report:018f4ea8-89af-47d7-b7e3-43d94f83292e:1"'
   responses:
     Problem:
       description: Problem response.
@@ -1961,6 +2187,387 @@ components:
             - $ref: "#/components/schemas/PreviousWorkoutExerciseResult"
             - type: "null"
         meta: { $ref: "#/components/schemas/Meta" }
+    BodyMeasurement:
+      type: object
+      additionalProperties: false
+      required: [id, measured_at, weight_kg, chest_cm, waist_cm, hips_cm, neck_cm, left_upper_arm_cm, right_upper_arm_cm, left_thigh_cm, right_thigh_cm, body_fat_percent, notes, source, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        measured_at: { type: string, format: date-time }
+        weight_kg: { type: [number, "null"], minimum: 20, maximum: 700 }
+        chest_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        waist_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        hips_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        neck_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        left_upper_arm_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        right_upper_arm_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        left_thigh_cm: { type: [number, "null"], minimum: 5, maximum: 250 }
+        right_thigh_cm: { type: [number, "null"], minimum: 5, maximum: 250 }
+        body_fat_percent: { type: [number, "null"], minimum: 0, maximum: 100 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        source: { type: string, enum: [manual, import] }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BodyMeasurementCreate:
+      type: object
+      additionalProperties: false
+      required: [measured_at]
+      anyOf:
+        - required: [weight_kg]
+        - required: [chest_cm]
+        - required: [waist_cm]
+        - required: [hips_cm]
+        - required: [neck_cm]
+        - required: [left_upper_arm_cm]
+        - required: [right_upper_arm_cm]
+        - required: [left_thigh_cm]
+        - required: [right_thigh_cm]
+        - required: [body_fat_percent]
+      properties:
+        measured_at: { type: string, format: date-time }
+        weight_kg: { type: number, minimum: 20, maximum: 700 }
+        chest_cm: { type: number, minimum: 5, maximum: 400 }
+        waist_cm: { type: number, minimum: 5, maximum: 400 }
+        hips_cm: { type: number, minimum: 5, maximum: 400 }
+        neck_cm: { type: number, minimum: 5, maximum: 200 }
+        left_upper_arm_cm: { type: number, minimum: 5, maximum: 200 }
+        right_upper_arm_cm: { type: number, minimum: 5, maximum: 200 }
+        left_thigh_cm: { type: number, minimum: 5, maximum: 250 }
+        right_thigh_cm: { type: number, minimum: 5, maximum: 250 }
+        body_fat_percent: { type: number, minimum: 0, maximum: 100 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    BodyMeasurementPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        measured_at: { type: string, format: date-time }
+        weight_kg: { type: [number, "null"], minimum: 20, maximum: 700 }
+        chest_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        waist_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        hips_cm: { type: [number, "null"], minimum: 5, maximum: 400 }
+        neck_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        left_upper_arm_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        right_upper_arm_cm: { type: [number, "null"], minimum: 5, maximum: 200 }
+        left_thigh_cm: { type: [number, "null"], minimum: 5, maximum: 250 }
+        right_thigh_cm: { type: [number, "null"], minimum: 5, maximum: 250 }
+        body_fat_percent: { type: [number, "null"], minimum: 0, maximum: 100 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WellnessEntry:
+      type: object
+      additionalProperties: false
+      required: [id, observed_at, day_start_at, timezone_at_entry, sleep_minutes, sleep_quality, energy, steps, calories_kcal, protein_g, fat_g, carbs_g, notes, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        observed_at: { type: string, format: date-time }
+        day_start_at: { type: string, format: date-time, readOnly: true }
+        timezone_at_entry: { type: string, minLength: 1, maxLength: 255, readOnly: true }
+        sleep_minutes: { type: [integer, "null"], minimum: 0, maximum: 1440 }
+        sleep_quality: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        energy: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        steps: { type: [integer, "null"], minimum: 0, maximum: 1000000 }
+        calories_kcal: { type: [number, "null"], minimum: 0, maximum: 50000 }
+        protein_g: { type: [number, "null"], minimum: 0, maximum: 5000 }
+        fat_g: { type: [number, "null"], minimum: 0, maximum: 5000 }
+        carbs_g: { type: [number, "null"], minimum: 0, maximum: 5000 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WellnessCreate:
+      type: object
+      additionalProperties: false
+      required: [observed_at]
+      anyOf:
+        - required: [sleep_minutes]
+        - required: [sleep_quality]
+        - required: [energy]
+        - required: [steps]
+        - required: [calories_kcal]
+        - required: [protein_g]
+        - required: [fat_g]
+        - required: [carbs_g]
+        - required: [notes]
+      properties:
+        observed_at: { type: string, format: date-time }
+        sleep_minutes: { type: integer, minimum: 0, maximum: 1440 }
+        sleep_quality: { type: integer, minimum: 1, maximum: 5 }
+        energy: { type: integer, minimum: 1, maximum: 5 }
+        steps: { type: integer, minimum: 0, maximum: 1000000 }
+        calories_kcal: { type: number, minimum: 0, maximum: 50000 }
+        protein_g: { type: number, minimum: 0, maximum: 5000 }
+        fat_g: { type: number, minimum: 0, maximum: 5000 }
+        carbs_g: { type: number, minimum: 0, maximum: 5000 }
+        notes: { type: string, minLength: 1, maxLength: 4000 }
+    WeightSummary:
+      type: object
+      additionalProperties: false
+      required: [current_kg, change_7d_kg, change_30d_kg, moving_average_7d_kg]
+      properties:
+        current_kg: { type: [number, "null"] }
+        change_7d_kg: { type: [number, "null"] }
+        change_30d_kg: { type: [number, "null"] }
+        moving_average_7d_kg: { type: [number, "null"] }
+    WeightPoint:
+      type: object
+      additionalProperties: false
+      required: [at, weight_kg, moving_average_7d_kg]
+      properties:
+        at: { type: string, format: date-time }
+        weight_kg: { type: number }
+        moving_average_7d_kg: { type: number }
+    PersonalRecord:
+      type: object
+      additionalProperties: false
+      required: [id, exercise_id, exercise_name, workout_id, workout_set_id, record_type, value, unit, weight_kg, calculation_version, formula, achieved_at]
+      properties:
+        id: { type: string, format: uuid }
+        exercise_id: { type: string, format: uuid }
+        exercise_name: { type: string }
+        workout_id: { type: string, format: uuid }
+        workout_set_id: { type: string, format: uuid }
+        record_type: { $ref: "#/components/schemas/PersonalRecordType" }
+        value: { type: number, minimum: 0 }
+        unit: { type: string, enum: [kg, repetitions, kg_repetitions] }
+        weight_kg: { type: [number, "null"], minimum: 0 }
+        calculation_version: { type: string }
+        formula: { type: [string, "null"] }
+        achieved_at: { type: string, format: date-time }
+    PlannedWorkout:
+      type: object
+      additionalProperties: false
+      required: [id, name, scheduled_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scheduled_at: { type: string, format: date-time }
+    ProgressDashboard:
+      type: object
+      additionalProperties: false
+      required: [as_of, timezone, week_start_at, week_end_at, weight, workouts_this_week, total_volume_kg, weekly_volume_kg, training_streak_weeks, new_achievements, next_planned_workout, calculation_version]
+      properties:
+        as_of: { type: string, format: date-time }
+        timezone: { type: string }
+        week_start_at: { type: string, format: date-time }
+        week_end_at: { type: string, format: date-time }
+        weight: { $ref: "#/components/schemas/WeightSummary" }
+        workouts_this_week: { type: integer, minimum: 0 }
+        total_volume_kg: { type: number, minimum: 0 }
+        weekly_volume_kg: { type: number, minimum: 0 }
+        training_streak_weeks: { type: integer, minimum: 0, maximum: 520 }
+        new_achievements: { type: array, items: { $ref: "#/components/schemas/PersonalRecord" } }
+        next_planned_workout:
+          oneOf: [{ $ref: "#/components/schemas/PlannedWorkout" }, { type: "null" }]
+        calculation_version: { type: string }
+    WeightProgress:
+      type: object
+      additionalProperties: false
+      required: [from, to, summary, points, calculation_version]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        summary: { $ref: "#/components/schemas/WeightSummary" }
+        points: { type: array, items: { $ref: "#/components/schemas/WeightPoint" } }
+        calculation_version: { type: string }
+    ExerciseProgressPoint:
+      type: object
+      additionalProperties: false
+      required: [workout_id, at, working_sets, repetitions, volume_kg, max_weight_kg, estimated_1rm_kg]
+      properties:
+        workout_id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+        working_sets: { type: integer, minimum: 0 }
+        repetitions: { type: integer, minimum: 0 }
+        volume_kg: { type: number, minimum: 0 }
+        max_weight_kg: { type: [number, "null"], minimum: 0 }
+        estimated_1rm_kg: { type: [number, "null"], minimum: 0 }
+    ExerciseProgress:
+      type: object
+      additionalProperties: false
+      required: [exercise_id, from, to, points, calculation_version]
+      properties:
+        exercise_id: { type: string, format: uuid }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        points: { type: array, items: { $ref: "#/components/schemas/ExerciseProgressPoint" } }
+        calculation_version: { type: string }
+    WeeklyReportGenerate:
+      type: object
+      additionalProperties: false
+      properties:
+        week_containing_at: { type: [string, "null"], format: date-time }
+    WeeklyReport:
+      type: object
+      additionalProperties: false
+      required: [id, period_start_at, period_end_at, timezone, revision, is_current, supersedes_report_id, status, metrics_schema_version, metrics, input_data_through_at, ai_insight_status, generated_at, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        period_start_at: { type: string, format: date-time }
+        period_end_at: { type: string, format: date-time }
+        timezone: { type: string }
+        revision: { type: integer, minimum: 1 }
+        is_current: { type: boolean }
+        supersedes_report_id: { type: [string, "null"], format: uuid }
+        status: { type: string, enum: [ready, stale] }
+        metrics_schema_version: { type: integer, const: 1 }
+        metrics:
+          oneOf: [{ $ref: "#/components/schemas/WeeklyMetrics" }, { type: "null" }]
+        input_data_through_at: { type: [string, "null"], format: date-time }
+        ai_insight_status: { type: string, enum: [not_requested] }
+        generated_at: { type: [string, "null"], format: date-time }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WeeklyMetrics:
+      type: object
+      additionalProperties: false
+      required: [totals, previous_week, weight, wellness, exercise_summaries, new_records, pain_messages, aggregated, coverage]
+      properties:
+        totals: { $ref: "#/components/schemas/WeeklyTotals" }
+        previous_week: { $ref: "#/components/schemas/PreviousWeekComparison" }
+        weight: { $ref: "#/components/schemas/WeightTrend" }
+        wellness: { $ref: "#/components/schemas/WellnessSummary" }
+        exercise_summaries: { type: array, items: { $ref: "#/components/schemas/ExerciseSummary" } }
+        new_records: { type: array, items: { $ref: "#/components/schemas/PersonalRecord" } }
+        pain_messages: { type: array, items: { $ref: "#/components/schemas/PainMessage" } }
+        aggregated: { $ref: "#/components/schemas/AggregatedIndicators" }
+        coverage: { $ref: "#/components/schemas/ReportCoverage" }
+    WeeklyTotals:
+      type: object
+      additionalProperties: false
+      required: [completed_workouts, working_sets, repetitions, volume_kg]
+      properties:
+        completed_workouts: { type: integer, minimum: 0 }
+        working_sets: { type: integer, minimum: 0 }
+        repetitions: { type: integer, minimum: 0 }
+        volume_kg: { type: number, minimum: 0 }
+    PreviousWeekComparison:
+      type: object
+      additionalProperties: false
+      required: [completed_workouts, volume_kg, workout_change, volume_change_kg, volume_change_percent]
+      properties:
+        completed_workouts: { type: integer, minimum: 0 }
+        volume_kg: { type: number, minimum: 0 }
+        workout_change: { type: integer }
+        volume_change_kg: { type: number }
+        volume_change_percent: { type: [number, "null"] }
+    WeightTrend:
+      type: object
+      additionalProperties: false
+      required: [samples, start_kg, end_kg, change_kg]
+      properties:
+        samples: { type: integer, minimum: 0 }
+        start_kg: { type: [number, "null"] }
+        end_kg: { type: [number, "null"] }
+        change_kg: { type: [number, "null"] }
+    WellnessSummary:
+      type: object
+      additionalProperties: false
+      required: [entries, average_sleep_hours, average_sleep_quality, average_energy, total_steps, average_calories_kcal, average_protein_g, average_fat_g, average_carbs_g]
+      properties:
+        entries: { type: integer, minimum: 0 }
+        average_sleep_hours: { type: [number, "null"], minimum: 0, maximum: 24 }
+        average_sleep_quality: { type: [number, "null"], minimum: 1, maximum: 5 }
+        average_energy: { type: [number, "null"], minimum: 1, maximum: 5 }
+        total_steps: { type: integer, minimum: 0 }
+        average_calories_kcal: { type: [number, "null"], minimum: 0 }
+        average_protein_g: { type: [number, "null"], minimum: 0 }
+        average_fat_g: { type: [number, "null"], minimum: 0 }
+        average_carbs_g: { type: [number, "null"], minimum: 0 }
+    ExerciseSummary:
+      type: object
+      additionalProperties: false
+      required: [exercise_id, exercise_name, working_sets, repetitions, volume_kg, max_weight_kg, best_estimated_1rm_kg]
+      properties:
+        exercise_id: { type: string, format: uuid }
+        exercise_name: { type: string }
+        working_sets: { type: integer, minimum: 0 }
+        repetitions: { type: integer, minimum: 0 }
+        volume_kg: { type: number, minimum: 0 }
+        max_weight_kg: { type: [number, "null"], minimum: 0 }
+        best_estimated_1rm_kg: { type: [number, "null"], minimum: 0 }
+    PainMessage:
+      type: object
+      additionalProperties: false
+      required: [workout_id, at, discomfort, comment]
+      properties:
+        workout_id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+        discomfort: { type: [string, "null"] }
+        comment: { type: [string, "null"] }
+    AggregatedIndicators:
+      type: object
+      additionalProperties: false
+      required: [training_days, exercise_count, average_difficulty, total_steps, average_calories_kcal, average_protein_g, average_fat_g, average_carbs_g]
+      properties:
+        training_days: { type: integer, minimum: 0 }
+        exercise_count: { type: integer, minimum: 0 }
+        average_difficulty: { type: [number, "null"], minimum: 1, maximum: 10 }
+        total_steps: { type: integer, minimum: 0 }
+        average_calories_kcal: { type: [number, "null"], minimum: 0 }
+        average_protein_g: { type: [number, "null"], minimum: 0 }
+        average_fat_g: { type: [number, "null"], minimum: 0 }
+        average_carbs_g: { type: [number, "null"], minimum: 0 }
+    ReportCoverage:
+      type: object
+      additionalProperties: false
+      required: [input_data_through_at, has_weight_data, has_wellness_data, has_workout_data]
+      properties:
+        input_data_through_at: { type: string, format: date-time }
+        has_weight_data: { type: boolean }
+        has_wellness_data: { type: boolean }
+        has_workout_data: { type: boolean }
+    BodyMeasurementEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/BodyMeasurement" }, meta: { $ref: "#/components/schemas/Meta" } }
+    BodyMeasurementCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: "#/components/schemas/BodyMeasurement" } }, meta: { $ref: "#/components/schemas/CollectionMeta" } }
+    WellnessEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/WellnessEntry" }, meta: { $ref: "#/components/schemas/Meta" } }
+    WellnessCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: "#/components/schemas/WellnessEntry" } }, meta: { $ref: "#/components/schemas/CollectionMeta" } }
+    PersonalRecordCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: "#/components/schemas/PersonalRecord" } }, meta: { $ref: "#/components/schemas/CollectionMeta" } }
+    ProgressDashboardEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/ProgressDashboard" }, meta: { $ref: "#/components/schemas/Meta" } }
+    WeightProgressEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/WeightProgress" }, meta: { $ref: "#/components/schemas/Meta" } }
+    ExerciseProgressEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/ExerciseProgress" }, meta: { $ref: "#/components/schemas/Meta" } }
+    WeeklyReportEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: "#/components/schemas/WeeklyReport" }, meta: { $ref: "#/components/schemas/Meta" } }
+    WeeklyReportCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: "#/components/schemas/WeeklyReport" } }, meta: { $ref: "#/components/schemas/CollectionMeta" } }
     Meta:
       type: object
       additionalProperties: false
@@ -2017,3 +2624,6 @@ components:
     WorkoutSetStatus:
       type: string
       enum: [planned, completed, skipped]
+    PersonalRecordType:
+      type: string
+      enum: [max_weight, max_reps, max_set_volume, estimated_1rm]

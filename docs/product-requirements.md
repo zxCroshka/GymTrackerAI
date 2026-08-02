@@ -24,7 +24,7 @@ The product is advisory, not medical. AI output must be presented as a suggestio
 
 - Social feeds, public profiles, leaderboards, coaching marketplaces, or shared team accounts.
 - Native mobile applications or offline-first synchronization.
-- Wearable integrations, nutrition logging, computer vision, or automatic exercise recognition.
+- Wearable integrations, meal-level nutrition planning, computer vision, or automatic exercise recognition. Daily aggregate calories/macronutrients and steps are in scope; foods, meals, recipes, and nutrient databases are not.
 - Medical diagnosis, injury treatment, rehabilitation prescriptions, or emergency guidance.
 - Fully autonomous training changes or AI writes to core user data.
 - Microservices, event brokers, data warehouses, or plugin systems.
@@ -76,7 +76,7 @@ An authenticated adult strength-training user who follows a repeatable program, 
 - **WORKOUT-03:** A workout contains ordered exercises and ordered sets. A completed set records set type, at least one metric supported by the exercise (weight, repetitions, duration, or distance), optional RIR, completion time, and optional notes.
 - **WORKOUT-04:** Weight is stored canonically in kilograms and RIR is constrained to `0.0` through `10.0`.
 - **WORKOUT-05:** A workout moves through explicit states: `planned`, `in_progress`, and then `completed` or `cancelled`. Invalid state transitions are rejected.
-- **WORKOUT-06:** Completing a workout validates completed-set data and sets a completion instant in one transaction. When the progress projection is implemented, personal-record updates join that same operation through its narrow module port.
+- **WORKOUT-06:** Completing a workout validates completed-set data, sets a completion instant, rebuilds personal-record discoveries, and marks affected current reports stale in one transaction through narrow module ports.
 - **WORKOUT-07:** A user can browse and filter their workout history by time range, status, program, and exercise.
 - **WORKOUT-08:** Completed history remains readable if a source program or custom exercise is later archived.
 - **WORKOUT-09:** A user can have at most one `in_progress` workout; a second start returns a visible conflict rather than silently abandoning or merging sessions.
@@ -86,7 +86,7 @@ An authenticated adult strength-training user who follows a repeatable program, 
 
 - **MEASUREMENT-01:** A user can record body mass and any subset of supported body-fat and circumference measurements at an explicit instant.
 - **MEASUREMENT-02:** Measurements are stored in kilograms and centimetres and converted for display when the user prefers imperial units.
-- **MEASUREMENT-03:** A user can create at most one daily wellness entry for the local civil day containing a supplied UTC observation instant. It can contain sleep duration, sleep quality, energy, soreness, stress, mood, and notes.
+- **MEASUREMENT-03:** A user can create at most one daily wellness entry for the local civil day containing a supplied UTC observation instant. The implemented v1 entry can contain sleep duration, sleep quality, energy, steps, aggregate calories/protein/fat/carbohydrates, and notes. Existing schema fields for soreness, stress, mood, and resting heart rate remain reserved for a later transport extension.
 - **MEASUREMENT-04:** The backend, not the client, calculates the exact start of that civil day from the current profile IANA zone and stores it as a UTC instant together with the zone used. The user updates their profile zone before logging travel-day data.
 
 ### 6.6 Progress and records
@@ -101,7 +101,7 @@ An authenticated adult strength-training user who follows a repeatable program, 
 
 - **REPORT-01:** A report covers a half-open weekly interval `[period_start_at, period_end_at)` calculated from the user's IANA time zone and represented by UTC instants.
 - **REPORT-02:** The deterministic report includes completed workouts, working sets, repetitions, volume, exercise performance, personal records, body trend, and wellness adherence when data exists.
-- **REPORT-03:** The system prevents duplicate reports for the same user and period and supports idempotent generation/retry.
+- **REPORT-03:** The implemented manual generation is state-idempotent: an existing current ready report is returned unchanged, while a stale current artifact is regenerated as a new immutable revision. Deterministic generation is synchronous and serialized per user; durable asynchronous retry is deferred until AI narrative work has a concrete need.
 - **REPORT-04:** AI-written insight is optional and is based only on the stored deterministic metrics. If OpenAI is unavailable, deterministic report data remains usable and the AI insight failure is visible.
 - **REPORT-05:** A report stores an immutable input cutoff and metric snapshot so later corrections do not silently rewrite what was originally reported. Explicit regeneration creates a new report revision and retains the prior artifact.
 - **REPORT-06:** Any source mutation affecting a generated period—including a newly completed/backdated workout, direct correction/deletion, or body/wellness create/update/delete—marks the current ready report stale. Metrics are read from one consistent database snapshot before optional AI insight.
@@ -183,6 +183,6 @@ An authenticated adult strength-training user who follows a repeatable program, 
 These questions do not block the architecture baseline but must be resolved before their feature is implemented:
 
 - Whether self-registration needs email verification and password reset in the first public release.
-- Which estimated-1RM formula becomes the default; the stored calculation version must make the choice auditable.
-- Whether weekly reports are generated automatically only, manually only, or both; the API supports idempotent manual requests either way.
+- Estimated 1RM is resolved for v1 as Epley `weight × (1 + repetitions / 30)`, eligible only for non-warmup sets with 1–15 repetitions and identified by calculation version.
+- Weekly reports are manually generated in the implemented backend. Automatic scheduling can be added later without changing period or revision semantics.
 - The concrete OpenAI model and reasoning setting, chosen by evaluation for quality, latency, and cost and configured server-side rather than hard-coded into the domain.

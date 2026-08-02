@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: executable foundation plus backend auth/profile/exercise/program/workout slices implemented; later product slices sequenced
+Status: backend slices through deterministic measurement/progress/report implemented; frontend product slices and AI sequenced
 
 Last updated: 2026-08-02
 
@@ -109,7 +109,7 @@ Backend exit gate reached: a user can create and activate a valid multi-day prog
 
 ## 7. Phase 4 — workout logging and history
 
-Current completion: the requested backend slice is implemented. It provides owner-scoped start from an active program day or ad-hoc start, one persisted in-progress workout, history/detail/active reads, metadata updates, nested exercise/set CRUD, previous exercise results, state-idempotent completion, CSV export, and explicit hard deletion. Completed workouts remain completed with a valid non-null completion instant while their owner makes an explicit ETag-protected correction in one transaction. Workout volume and Epley estimated 1RM for sets with at most 15 repetitions are calculated dynamically from persisted source sets in the current slice; progress projections and weekly-report invalidation remain future module integrations rather than placeholder behavior.
+Current completion: the requested backend slice is implemented. It provides owner-scoped start from an active program day or ad-hoc start, one persisted in-progress workout, history/detail/active reads, metadata updates, nested exercise/set CRUD, previous exercise results, state-idempotent completion, CSV export, and explicit hard deletion. Completed-workout completion/correction/deletion now invokes the implemented transactional personal-record rebuild and affected-report staleness ports.
 
 Deliverables:
 
@@ -125,7 +125,7 @@ Deliverables:
 - Next.js active-workout logging optimized for common set entry, history/detail, error/retry/offline-not-supported messaging;
 - synchronized OpenAPI for all implemented lifecycle, nested, previous-result, and export operations.
 
-The current backend intentionally has no fake progress, personal-record, or report hooks. Once those modules exist, completion, direct completed correction, and hard deletion must call their narrow public ports in the same transaction to recalculate affected projections and mark every affected report period stale.
+The backend has concrete progress/report ports rather than fake hooks. Their failure rolls the workout mutation back, preserving source/projection consistency.
 
 Verification:
 
@@ -138,10 +138,12 @@ Backend exit gate reached: program-to-completed-workout-to-history is reliable, 
 
 ## 8. Phase 5 — measurements and progress
 
+Current completion: the requested backend subset is implemented. It includes body measurement create/list/versioned correction/delete, daily wellness create/list with civil-day uniqueness, sleep/activity/daily aggregate nutrition, dashboard/weight/exercise/record queries, and transactionally rebuildable PR discoveries. Frontend forms and charts remain future work.
+
 Deliverables:
 
 - measurement/progress persistence against existing foundation tables;
-- body/wellness CRUD with item ETags, canonical units, backend-calculated UTC/IANA civil-day boundary and uniqueness;
+- body measurement CRUD through the requested routes and wellness create/list with item versions, canonical units, backend-calculated UTC/IANA civil-day boundary and uniqueness;
 - deterministic personal-record recalculation tied to workout completion, direct completed correction, and explicit deletion through a narrow transactional progress port;
 - bounded progress summary, body, volume, exercise and record endpoints with calculation versions;
 - persisted-projection fixtures for the documented calculation-versioned Epley formula and its 15-repetition eligibility boundary;
@@ -155,27 +157,29 @@ Verification:
 - frontend metric/unit labels, empty states, chart accessibility and form conversion tests;
 - query-plan review with representative synthetic history.
 
-Exit gate: charts/records are reproducible from source sets/measurements, bounded, correctly labelled and never fabricated.
+Backend exit gate reached: returned series/records are reproducible from source sets/measurements, bounded, correctly labelled and explicit when empty. The phase remains open only for frontend UX.
 
 ## 9. Phase 6 — weekly reports
+
+Current completion: deterministic manual generation is implemented synchronously without OpenAI. It captures a stable logical snapshot in a `READ COMMITTED` transaction under the shared per-user source lock, inserts immutable ready revisions, returns an existing current ready artifact unchanged, regenerates stale current artifacts, and exposes owner-scoped list/detail routes. Queue/runner and AI narrative are deliberately not implemented.
 
 Deliverables:
 
 - report persistence against the existing revisioned `weekly_reports` table and source indexes;
-- deterministic metric schema/version, UTC week-boundary calculation from profile IANA zone, pending/generating/ready/failed/stale states;
-- internal runner claim/lease/retry/backpressure behavior with attempt fencing and idempotent generation/regeneration;
-- capture deterministic metrics/cutoff in one short repeatable-read snapshot, preserve old current artifact until a replacement is ready, and mark reports stale on every affecting workout completion/direct correction/deletion or measurement/wellness source mutation;
-- Next.js current/revision/status/metrics/source-link UI;
+- deterministic metric schema/version and UTC week-boundary calculation from profile IANA zone; implemented transport uses ready/stale states while persistence retains future lifecycle support;
+- synchronous state-idempotent manual generation; internal runner claim/lease/retry behavior is deferred until asynchronous AI work is authorized;
+- capture deterministic metrics/cutoff in one short transaction under the shared source lock, preserve old current artifact until a replacement is ready, and mark reports stale on every affecting workout completion/direct correction/deletion or measurement/wellness source mutation;
+- future Next.js current/revision/status/metrics/source-link UI;
 - AI insight field/status supported but disabled/not requested until coach infrastructure is production-ready.
 
 Verification:
 
 - unit/golden tests for metric schema/calculations and missing data;
-- integration fixtures around DST (167/168/169-hour weeks), period/source cutoffs, one-current-revision, concurrent generate/regenerate, runner crash/lease and tenant isolation;
-- API `202` polling/idempotency/status tests;
+- integration fixtures around DST (167/168/169-hour weeks), period/source cutoffs, one-current-revision, concurrent generate/regenerate, and tenant isolation; runner crash/lease coverage belongs to the future asynchronous AI phase;
+- API synchronous create/existing-ready/stale-regeneration/status tests;
 - frontend pending/failure/stale/revision/accessibility tests.
 
-Exit gate: deterministic reports work without OpenAI and retain immutable revisions/cutoffs.
+Backend exit gate reached: deterministic reports work without OpenAI and retain immutable revisions/cutoffs; frontend report UX remains future work.
 
 ## 10. Phase 7 — AI coach and report insight
 
@@ -273,7 +277,7 @@ A slice is ready when:
 | Risk | Mitigation |
 |---|---|
 | Cross-user data leak | tenant-safe FKs, mandatory scoped APIs, IDOR matrix for REST and every coach tool |
-| History corrupted by program edits or unsafe corrections | immutable source snapshots under later program/exercise edits; owner-only ETag-protected direct corrections in one transaction; future projection recalculation/report staleness ports |
+| History corrupted by program edits or unsafe corrections | immutable source snapshots under later program/exercise edits; owner-only ETag-protected corrections plus concrete same-transaction projection rebuild/report staleness ports |
 | Duplicate/lost concurrent changes | transactions, root versions/ETags, idempotency records, row locks |
 | Time-zone/DST report errors | store UTC boundaries + zone snapshot, half-open intervals, 167/169-hour fixtures |
 | Go ecosystem moves beyond 1.22 | dependency compatibility gate, pin versions, planned Go upgrade rather than implicit change |

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,8 @@ import (
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/httpserver"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/logging"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/program"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/progress"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/report"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/user"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/workout"
 )
@@ -54,14 +57,21 @@ func run() error {
 		slog.Int("max_connections", int(cfg.Database.MaxConnections)),
 	)
 
+	reportSource := report.NewSourceInvalidator()
 	userRepository := user.NewRepository(pool)
-	measurementRepository := measurement.NewRepository()
+	measurementRepository := measurement.NewRepository(pool)
 	measurementWriter := user.InitialMeasurementWriterFunc(func(ctx context.Context, tx pgx.Tx, value user.InitialMeasurement) error {
-		return measurementRepository.InsertInitial(ctx, tx, measurement.InitialMeasurement{
+		if err := reportSource.LockUser(ctx, tx, value.UserID); err != nil {
+			return err
+		}
+		if err := measurementRepository.InsertInitial(ctx, tx, measurement.InitialMeasurement{
 			ID: value.ID, UserID: value.UserID, MeasuredAt: value.MeasuredAt,
 			WeightKG: value.WeightKG, ChestCM: value.ChestCM, WaistCM: value.WaistCM,
 			HipsCM: value.HipsCM, NeckCM: value.NeckCM, BicepsCM: value.BicepsCM,
-		})
+		}); err != nil {
+			return err
+		}
+		return reportSource.MarkPeriodsStale(ctx, tx, value.UserID, []time.Time{value.MeasuredAt}, value.MeasuredAt)
 	})
 	userService := user.NewService(pool, userRepository, measurementWriter)
 	authRepository := auth.NewRepository(pool)
@@ -78,8 +88,17 @@ func run() error {
 	programService := program.NewService(pool, programRepository, exerciseService)
 	programHandler := program.NewHandler(programService, logger)
 	workoutRepository := workout.NewRepository(pool)
-	workoutService := workout.NewService(pool, workoutRepository, programService, exerciseService)
+	progressRepository := progress.NewRepository(pool)
+	recordProjector := progress.NewRecordProjector(progressRepository, workoutRepository)
+	workoutService := workout.NewService(pool, workoutRepository, programService, exerciseService, recordProjector, reportSource)
 	workoutHandler := workout.NewHandler(workoutService, logger)
+	measurementService := measurement.NewService(pool, measurementRepository, userService, reportSource)
+	measurementHandler := measurement.NewHandler(measurementService, logger)
+	progressService := progress.NewService(progressRepository, measurementService, workoutService, userService)
+	progressHandler := progress.NewHandler(progressService, logger)
+	reportRepository := report.NewRepository(pool)
+	reportService := report.NewService(pool, reportRepository, reportSource, userService, workoutService, measurementService, progressService)
+	reportHandler := report.NewHandler(reportService, logger)
 	registerAPI := func(router chi.Router) {
 		authHandler.RegisterRoutes(router)
 		router.Group(func(private chi.Router) {
@@ -88,6 +107,9 @@ func run() error {
 			exerciseHandler.RegisterRoutes(private)
 			programHandler.RegisterRoutes(private)
 			workoutHandler.RegisterRoutes(private)
+			measurementHandler.RegisterRoutes(private)
+			progressHandler.RegisterRoutes(private)
+			reportHandler.RegisterRoutes(private)
 		})
 	}
 
