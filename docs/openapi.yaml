@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: GymTracker AI API
-  version: 0.2.0
-  description: Implemented auth and user-profile contract. All instants are UTC RFC 3339 values.
+  version: 0.3.0
+  description: Implemented auth, user-profile, exercise catalogue, and training-program contract. All instants are UTC RFC 3339 values.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -213,6 +213,329 @@ paths:
           $ref: "#/components/responses/Problem"
         "428":
           $ref: "#/components/responses/Problem"
+  /exercises:
+    get:
+      tags: [exercise]
+      operationId: listExercises
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: scope, in: query, schema: { type: string, enum: [all, system, mine], default: all } }
+        - { name: muscle_group, in: query, schema: { $ref: "#/components/schemas/MuscleGroup" } }
+        - { name: type, in: query, schema: { $ref: "#/components/schemas/ExerciseType" } }
+        - { name: equipment, in: query, schema: { $ref: "#/components/schemas/Equipment" } }
+        - { name: tracks_weight, in: query, schema: { type: boolean } }
+        - { name: tracks_repetitions, in: query, schema: { type: boolean } }
+        - { name: tracks_time, in: query, schema: { type: boolean } }
+        - { name: tracks_distance, in: query, schema: { type: boolean } }
+        - { name: include_archived, in: query, schema: { type: boolean, default: false } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Visible system exercises and the authenticated user's own custom exercises, ordered by normalized name and UUID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExerciseCollectionEnvelope"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [exercise]
+      operationId: createExercise
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExerciseCreate"
+      responses:
+        "201":
+          description: Custom exercise created.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/ExerciseETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExerciseEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+  /exercises/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [exercise]
+      operationId: getExercise
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Visible system or owned custom exercise. Archived owned exercises remain directly readable.
+          headers:
+            ETag: { $ref: "#/components/headers/ExerciseETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExerciseEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+    patch:
+      tags: [exercise]
+      operationId: updateExercise
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExercisePatch"
+      responses:
+        "200":
+          description: Owned custom exercise updated.
+          headers:
+            ETag: { $ref: "#/components/headers/ExerciseETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExerciseEnvelope"
+        "403":
+          description: System exercises are immutable.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [exercise]
+      operationId: archiveExercise
+      description: Archives an owned custom exercise. Referencing program/workout history is retained.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: Exercise archived.
+        "403":
+          description: System exercises are immutable.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /programs:
+    get:
+      tags: [program]
+      operationId: listPrograms
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ProgramStatus" } }
+        - { name: include_archived, in: query, schema: { type: boolean, default: false } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Owned program summaries ordered by last update and UUID descending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramCollectionEnvelope"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [program]
+      operationId: createProgram
+      description: Creates a draft program and its optional ordered tree transactionally.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProgramCreate"
+      responses:
+        "201":
+          description: Draft program created.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/ProgramETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+  /programs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [program]
+      operationId: getProgram
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Full owned program aggregate, including ordered days and exercises.
+          headers:
+            ETag: { $ref: "#/components/headers/ProgramETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+    patch:
+      tags: [program]
+      operationId: updateProgram
+      description: Strict partial root update. If days is present, it atomically replaces the active ordered tree and archives the previous tree.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProgramPatch"
+      responses:
+        "200":
+          description: Program aggregate updated; root version incremented once.
+          headers:
+            ETag: { $ref: "#/components/headers/ProgramETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramEnvelope"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [program]
+      operationId: archiveProgram
+      description: Archives the program root without deleting its current or previous tree rows.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: Program archived.
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /programs/{id}/duplicate:
+    post:
+      tags: [program]
+      operationId: duplicateProgram
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProgramDuplicate"
+      responses:
+        "201":
+          description: Independent draft copy created with fresh program/day/item UUIDs.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/ProgramETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramEnvelope"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+  /programs/{id}/activate:
+    post:
+      tags: [program]
+      operationId: activateProgram
+      description: Atomically deactivates any currently active owned program and activates this one. The request body must be empty.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: Target program activated. At most one program remains active.
+          headers:
+            ETag: { $ref: "#/components/headers/ProgramETag" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramEnvelope"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
 components:
   securitySchemes:
     bearerAuth:
@@ -237,10 +560,29 @@ components:
       schema:
         type: string
         format: uri
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 1024 }
   headers:
     ProfileETag:
       schema: { type: string }
       example: '"profile:018f4ea8-89af-47d7-b7e3-43d94f83292e:3"'
+    ExerciseETag:
+      schema: { type: string }
+      example: '"exercise:018f4ea8-89af-47d7-b7e3-43d94f83292e:3"'
+    ProgramETag:
+      schema: { type: string }
+      example: '"program:018f4ea8-89af-47d7-b7e3-43d94f83292e:7"'
   responses:
     Problem:
       description: Problem response.
@@ -490,6 +832,264 @@ components:
           $ref: "#/components/schemas/ImportData"
         meta:
           $ref: "#/components/schemas/Meta"
+    Exercise:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - owner_user_id
+        - name
+        - description
+        - instructions
+        - primary_muscle_group
+        - exercise_type
+        - equipment
+        - movement_pattern
+        - is_unilateral
+        - tracks_weight
+        - tracks_repetitions
+        - tracks_time
+        - tracks_distance
+        - version
+        - archived_at
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        owner_user_id: { type: [string, "null"], format: uuid, description: Null identifies a system exercise. }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        instructions: { type: [string, "null"], minLength: 1, maxLength: 8000 }
+        primary_muscle_group:
+          oneOf:
+            - $ref: "#/components/schemas/MuscleGroup"
+            - type: "null"
+        exercise_type: { $ref: "#/components/schemas/ExerciseType" }
+        equipment:
+          oneOf:
+            - $ref: "#/components/schemas/Equipment"
+            - type: "null"
+        movement_pattern: { type: [string, "null"], minLength: 1, maxLength: 100 }
+        is_unilateral: { type: boolean }
+        tracks_weight: { type: boolean }
+        tracks_repetitions: { type: boolean }
+        tracks_time: { type: boolean }
+        tracks_distance: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        archived_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ExerciseCreate:
+      type: object
+      additionalProperties: false
+      required: [name, exercise_type, equipment]
+      anyOf:
+        - required: [tracks_weight]
+          properties: { tracks_weight: { const: true } }
+        - required: [tracks_repetitions]
+          properties: { tracks_repetitions: { const: true } }
+        - required: [tracks_time]
+          properties: { tracks_time: { const: true } }
+        - required: [tracks_distance]
+          properties: { tracks_distance: { const: true } }
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        instructions: { type: [string, "null"], minLength: 1, maxLength: 8000 }
+        primary_muscle_group:
+          oneOf:
+            - $ref: "#/components/schemas/MuscleGroup"
+            - type: "null"
+        exercise_type: { $ref: "#/components/schemas/ExerciseType" }
+        equipment: { $ref: "#/components/schemas/Equipment" }
+        movement_pattern: { type: [string, "null"], minLength: 1, maxLength: 100 }
+        is_unilateral: { type: boolean, default: false }
+        tracks_weight: { type: boolean, default: false }
+        tracks_repetitions: { type: boolean, default: false }
+        tracks_time: { type: boolean, default: false }
+        tracks_distance: { type: boolean, default: false }
+    ExercisePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        instructions: { type: [string, "null"], minLength: 1, maxLength: 8000 }
+        primary_muscle_group:
+          oneOf:
+            - $ref: "#/components/schemas/MuscleGroup"
+            - type: "null"
+        exercise_type: { $ref: "#/components/schemas/ExerciseType" }
+        equipment: { $ref: "#/components/schemas/Equipment" }
+        movement_pattern: { type: [string, "null"], minLength: 1, maxLength: 100 }
+        is_unilateral: { type: boolean }
+        tracks_weight: { type: boolean }
+        tracks_repetitions: { type: boolean }
+        tracks_time: { type: boolean }
+        tracks_distance: { type: boolean }
+    ExerciseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/Exercise" }
+        meta: { $ref: "#/components/schemas/Meta" }
+    ExerciseCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Exercise" }
+        meta: { $ref: "#/components/schemas/CollectionMeta" }
+    Program:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - description
+        - goal
+        - status
+        - version
+        - activated_at
+        - inactivated_at
+        - archived_at
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        goal: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        status: { $ref: "#/components/schemas/ProgramStatus" }
+        version: { type: integer, minimum: 1 }
+        activated_at: { type: [string, "null"], format: date-time }
+        inactivated_at: { type: [string, "null"], format: date-time }
+        archived_at: { type: [string, "null"], format: date-time }
+        days:
+          type: array
+          maxItems: 14
+          items: { $ref: "#/components/schemas/ProgramDay" }
+          description: Present on aggregate responses and omitted from list summaries.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProgramDay:
+      type: object
+      additionalProperties: false
+      required: [id, position, name, notes, exercises, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer, minimum: 1, maximum: 14 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        exercises:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ProgramDayExercise" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProgramDayExercise:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - exercise_id
+        - position
+        - working_sets
+        - target_reps_min
+        - target_reps_max
+        - target_rir
+        - rest_seconds
+        - notes
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        exercise_id: { type: string, format: uuid }
+        position: { type: integer, minimum: 1, maximum: 50 }
+        working_sets: { type: integer, minimum: 1, maximum: 100 }
+        target_reps_min: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_reps_max: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        rest_seconds: { type: [integer, "null"], minimum: 0, maximum: 86400 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProgramCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        goal: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        days:
+          type: array
+          maxItems: 14
+          default: []
+          items: { $ref: "#/components/schemas/ProgramDayInput" }
+    ProgramPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        goal: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        days:
+          type: array
+          maxItems: 14
+          items: { $ref: "#/components/schemas/ProgramDayInput" }
+    ProgramDayInput:
+      type: object
+      additionalProperties: false
+      required: [position, name]
+      properties:
+        position: { type: integer, minimum: 1, maximum: 14 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        exercises:
+          type: array
+          maxItems: 50
+          default: []
+          items: { $ref: "#/components/schemas/ProgramDayExerciseInput" }
+    ProgramDayExerciseInput:
+      type: object
+      additionalProperties: false
+      required: [exercise_id, position, working_sets]
+      properties:
+        exercise_id: { type: string, format: uuid }
+        position: { type: integer, minimum: 1, maximum: 50 }
+        working_sets: { type: integer, minimum: 1, maximum: 100 }
+        target_reps_min: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_reps_max: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        rest_seconds: { type: [integer, "null"], minimum: 0, maximum: 86400 }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    ProgramDuplicate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: [string, "null"], minLength: 1, maxLength: 200 }
+    ProgramEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/Program" }
+        meta: { $ref: "#/components/schemas/Meta" }
+    ProgramCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Program" }
+        meta: { $ref: "#/components/schemas/CollectionMeta" }
     Meta:
       type: object
       additionalProperties: false
@@ -497,6 +1097,13 @@ components:
       properties:
         request_id:
           type: string
+    CollectionMeta:
+      type: object
+      additionalProperties: false
+      required: [request_id]
+      properties:
+        request_id: { type: string }
+        next_cursor: { type: [string, "null"] }
     Problem:
       type: object
       additionalProperties: false
@@ -521,3 +1128,15 @@ components:
     UnitSystem:
       type: string
       enum: [metric, imperial]
+    ExerciseType:
+      type: string
+      enum: [strength, cardio, stretching, bodyweight, isometric]
+    Equipment:
+      type: string
+      enum: [barbell, dumbbell, machine, cable, pullup_bar, parallel_bars, bodyweight, other]
+    MuscleGroup:
+      type: string
+      enum: [chest, back, quadriceps, hamstrings, glutes, posterior_chain, shoulders, biceps, triceps, calves, core, full_body, cardio, other]
+    ProgramStatus:
+      type: string
+      enum: [draft, active, inactive, archived]

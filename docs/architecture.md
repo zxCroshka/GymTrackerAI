@@ -1,6 +1,6 @@
 # GymTracker AI architecture
 
-Status: proposed design baseline
+Status: implemented baseline through backend exercise/program stage; later slices remain proposed
 
 Last updated: 2026-08-02
 
@@ -109,6 +109,7 @@ Cross-module workflows use an application coordinator and one shared pgx transac
 
 - **Registration:** `auth` creates the identity and `user` creates the default profile atomically.
 - **Profile import:** `user` owns strict profile/notes validation and calls the narrow `measurement` initial-write port through composition-root wiring; profile, notes, and optional first measurement commit atomically.
+- **Program write/activation:** `program` owns one transaction and calls only the narrow `exercise.IsUsable(ctx, tx, actor, exercise)` port. The check locks each visible non-archived exercise against concurrent archival until the program transaction commits; `program` never imports exercise persistence internals.
 - **Start from program:** `workout` asks `program` for an authorized prescription snapshot and `exercise` for visible metadata, then owns the copied workout rows.
 - **Complete/reopen workout:** `workout` validates and changes status; `progress` recalculates affected personal records. Any completion/correction affecting an already generated period marks its current report stale. The coordinator commits all changes together.
 - **Source measurement/wellness mutation:** `measurement` changes the owned row and marks every current report covering the event/day before or after the mutation stale in the same transaction.
@@ -149,14 +150,14 @@ The browser does not persist access tokens in local storage. After a page reload
 
 ## 8. REST API architecture
 
-- All endpoints live under `/api/v1` and are defined in `api-contract.md` and the future OpenAPI document.
+- All product endpoints live under `/api/v1` and implemented operations are defined in `api-contract.md` and `openapi.yaml`.
 - JSON uses `snake_case`, UUID identifiers, and explicit UTC timestamps.
 - Successful responses use a consistent `{ "data": ..., "meta": ... }` envelope; errors use `application/problem+json` compatible with RFC 9457.
 - Cursor pagination is used for growing collections. Chart and tool queries are aggregated and range-bounded.
-- High-risk/retry-prone POST operations require `Idempotency-Key` and are persisted without storing authentication responses or secrets.
+- Durable `Idempotency-Key` replay is a later platform capability for high-risk/retry-prone business POSTs; implemented program activation uses a transaction plus ETag, and duplicate requires client reconciliation after an ambiguous failure.
 - Program, workout, profile/AI settings, custom-exercise, body-measurement, wellness, conversation, recommendation, and report mutations use ETags/`If-Match` where lost updates matter.
 - Unknown JSON fields and multiple JSON values are rejected; body size and request deadlines are route-specific.
-- OpenAPI is design-first and committed. CI validates it, generated or typed clients as applicable, transport behavior, examples, and breaking changes.
+- OpenAPI is committed and synchronized with implemented transport behavior; stronger lint/breaking-change automation can be added without changing module boundaries.
 
 ## 9. Frontend architecture
 
@@ -249,6 +250,7 @@ Metrics should cover request latency/error rates, pgx pool pressure/query durati
 | Async processing | Durable statuses plus internal runner | No broker/worker operations; API process must manage leases and backpressure carefully |
 | Access token storage | Browser memory; refresh token HttpOnly cookie | Reduces token theft persistence/CSRF surface; reload needs refresh bootstrap and private SSR is limited |
 | Canonical units | kg/cm in DB and API | Simple analytics; clients must correctly convert and label imperial input/output |
+| Program editing API | Full aggregate tree on create and optional PATCH replacement | Fewer routes and atomic ordering validation; larger payloads and fresh child UUIDs require editor refetch after save |
 | AI context | `store: false`, app-managed bounded context | Better data minimization/control; more token/context engineering and no reliance on provider conversation persistence |
 | AI tool sequencing | Disable parallel calls initially | Easier auditing/rate control; potentially higher coach latency |
 | Analytics | Query-time aggregates plus persisted PR/report snapshots | Avoids warehouse complexity; indexes and bounded ranges are essential as history grows |

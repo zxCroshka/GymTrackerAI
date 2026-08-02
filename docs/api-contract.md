@@ -1,6 +1,6 @@
 # GymTracker AI REST API contract
 
-Status: design contract for future OpenAPI; no handlers have been created
+Status: implemented contract through backend exercise/program stage; later modules remain design
 
 Last updated: 2026-08-02
 
@@ -25,7 +25,7 @@ Two minimal operational endpoints live outside the product API and are public to
 - Instants are RFC 3339 UTC strings ending in `Z`; no local timestamp or bare calendar date is accepted for an instant.
 - Canonical weights are kilograms and lengths are centimetres. Numeric fields are JSON numbers.
 - `from` is inclusive and `to` exclusive. The server rejects `to <= from` and route-specific excessive ranges.
-- Request content type is `application/json`; unknown fields, duplicate object keys where detectable, trailing JSON values, oversized bodies, and invalid UTF-8 are rejected.
+- Request content type is `application/json`; unknown fields, trailing JSON values, oversized bodies, and invalid UTF-8 are rejected. Duplicate-key rejection is not yet guaranteed by Go's standard JSON decoder, so clients must not send duplicate keys.
 - PATCH is a documented partial object: missing means unchanged; `null` clears only a nullable field. JSON Merge Patch and JSON Patch are not implicitly supported.
 - Private resources owned by another user are returned as `404`, not `403`, to avoid ID enumeration.
 - Archive hides a resource from default collections and prevents normal mutation/use; direct GET by its owner remains available for inspection and returns its current ETag.
@@ -53,14 +53,12 @@ Collection:
   "data": [],
   "meta": {
     "request_id": "7ee593c5-04b4-4b6c-82ad-54d81095c99a",
-    "pagination": {
-      "limit": 20,
-      "next_cursor": null,
-      "has_more": false
-    }
+    "next_cursor": "eyJpZCI6IjAxOGYifQ"
   }
 }
 ```
+
+`next_cursor` is omitted when there is no next page. Limits are request parameters and are not repeated in the response.
 
 `204 No Content` has no envelope/body. Creation returns `Location` and normally `201`; accepted asynchronous work returns `202` with the pending resource.
 
@@ -76,14 +74,7 @@ Errors use `application/problem+json`, compatible with RFC 9457:
   "detail": "Request contains invalid fields",
   "instance": "/api/v1/workouts/018f.../complete",
   "code": "validation_failed",
-  "request_id": "7ee593c5-04b4-4b6c-82ad-54d81095c99a",
-  "errors": [
-    {
-      "field": "rir",
-      "code": "out_of_range",
-      "message": "Must be between 0 and 10"
-    }
-  ]
+  "request_id": "7ee593c5-04b4-4b6c-82ad-54d81095c99a"
 }
 ```
 
@@ -91,13 +82,13 @@ Stable `code` values, not English details, drive frontend behavior.
 
 | Status | Meaning |
 |---:|---|
-| `400` | malformed JSON/query/cursor, unknown field, wrong content type |
+| `400` | malformed JSON/query/cursor or unknown field |
 | `401` | missing/invalid/expired access credential or inactive user |
 | `403` | authenticated actor lacks a global capability; not used to reveal foreign ownership |
 | `404` | resource absent, archived when excluded, or belongs to another user |
 | `409` | business conflict, invalid lifecycle transition, reused idempotency key, stale AI proposal |
 | `412` | supplied `If-Match` is stale |
-| `413` | request body exceeds the route limit (`payload_too_large`) |
+| `413` | request body exceeds the route limit (`body_too_large`) |
 | `415` | unsupported or missing request media type (`unsupported_media_type`) |
 | `422` | syntactically valid request violates field/domain rules |
 | `428` | required `If-Match` is missing |
@@ -111,7 +102,7 @@ The client may send a valid bounded `X-Request-ID`; otherwise the backend create
 
 ## 3. Pagination, filtering, ordering, and caching
 
-Growing collections use `?limit=20&cursor=<opaque>`. Default is 20; maximum is 100 unless OpenAPI documents a smaller route limit. Cursors encode/sign a stable sort key plus UUID and are valid only for the same route/filter/order. Invalid/mismatched cursors return `400`.
+Implemented growing collections use `?limit=50&cursor=<opaque>` with a maximum of 100. Cursors encode a stable sort key plus UUID as strictly validated opaque base64url data; they are not signatures or authorization artifacts. Clients must reuse a cursor only with the route/filter/order that produced it. Every page query independently reapplies ownership and filters; malformed cursors return `400`.
 
 History defaults to descending event instant then ID; ordered aggregate children return ascending `position` and are not cursor-paginated within documented aggregate limits. `total` is omitted unless a concrete UI requirement justifies the count query.
 
@@ -119,10 +110,10 @@ Collection filters are allowlisted per endpoint. Repeating/unknown filters retur
 
 ## 4. Idempotency and optimistic concurrency
 
-`Idempotency-Key` is accepted only on authenticated, non-credential-bearing business POST requests. It is rejected with `400 idempotency_not_supported` on `/auth/*` and `/users/me/deletion`, whose request/response material is never persisted for replay. The authoritative required matrix is:
+Durable `Idempotency-Key` replay storage is not implemented yet and is therefore not advertised by implemented auth, profile, exercise, or program operations. `POST /programs/{id}/duplicate` is not transport-idempotent: after an ambiguous network failure the client must refetch the list before deciding whether to retry. Program activation is transactional and state-safe, but a retry with the consumed ETag receives `412` and must refetch.
 
-- restore a custom exercise;
-- activate a program;
+When durable replay is introduced for later business slices, it is intended for operations such as:
+
 - create a workout, workout exercise, or set;
 - start, complete, or reopen a workout;
 - create a body measurement or wellness entry;
@@ -130,7 +121,7 @@ Collection filters are allowlisted per endpoint. Repeating/unknown filters retur
 - generate or regenerate a weekly report;
 - confirm or reject an AI recommendation.
 
-Keys are scoped by authenticated user, method, and canonical path and retained for at least 24 hours. Same key and canonical request hash replays the stored status/body with `Idempotency-Replayed: true`; a different request returns `409 idempotency_key_reused`. A simultaneous duplicate while the first key is `processing` returns `409 idempotency_in_progress` with `Retry-After`. Completed replay is checked before ETag/lifecycle preconditions so retrying a successful transition cannot become a false `412`/`409`.
+The future mechanism must scope keys by authenticated user, method, and canonical path, bind them to a canonical request hash, and handle completed replay and simultaneous processing. It must not be approximated with process memory.
 
 Mutable aggregates return strong ETags such as:
 
@@ -170,13 +161,14 @@ Profile ETags have the form `"profile:{user_id}:{version}"`. Import accepts exac
 | Method | Route | Concurrency | Behavior |
 |---|---|---|---|
 | `GET` | `/exercises` | — | visible global + custom catalogue; cursor list |
-| `POST` | `/exercises` | idempotency supported | create custom exercise; `201` |
-| `GET` | `/exercises/{exercise_id}` | returns ETag for custom | visible exercise |
-| `PATCH` | `/exercises/{exercise_id}` | custom `If-Match` required | edit owned custom exercise; global returns `403` |
-| `DELETE` | `/exercises/{exercise_id}` | custom `If-Match` required | archive owned custom exercise; `204` |
-| `POST` | `/exercises/{exercise_id}/restore` | `Idempotency-Key` + `If-Match` required | restore owned custom exercise if name does not conflict; `200` |
+| `POST` | `/exercises` | — | create custom exercise; `201` |
+| `GET` | `/exercises/{id}` | returns ETag | visible exercise |
+| `PATCH` | `/exercises/{id}` | `If-Match` required | edit owned custom exercise; system returns `403` |
+| `DELETE` | `/exercises/{id}` | `If-Match` required | archive owned custom exercise; `204` |
 
-List filters: `q`, `scope=all|system|mine`, `primary_muscle_group`, `equipment`, and `include_archived` (owned only). Direct GET of an archived owned custom exercise remains available and returns its item ETag for review/restore. Resource fields follow the table in `database-schema.md`; system exercises have `owner_user_id: null` and are read-only.
+List filters are `q`, `scope=all|system|mine`, `muscle_group`, `type`, `equipment`, `tracks_weight`, `tracks_repetitions`, `tracks_time`, `tracks_distance`, `include_archived`, `limit`, and `cursor`. Unknown or repeated query fields are rejected. Search is a case-normalized literal substring search, so `%` and `_` have no wildcard meaning. Direct GET of an archived owned custom exercise remains available for inspection. System exercises have `owner_user_id: null`, are read-only, and are never visible across ownership predicates as another user's custom exercise.
+
+Types are `strength`, `cardio`, `stretching`, `bodyweight`, and `isometric`. Equipment is `barbell`, `dumbbell`, `machine`, `cable`, `pullup_bar`, `parallel_bars`, `bodyweight`, or `other`. At least one tracking capability must be enabled.
 
 ## 8. Program module
 
@@ -185,23 +177,17 @@ List filters: `q`, `scope=all|system|mine`, `primary_muscle_group`, `equipment`,
 | Method | Route | Behavior |
 |---|---|---|
 | `GET`, `POST` | `/programs` | cursor list / create draft (`201`) |
-| `GET`, `PATCH`, `DELETE` | `/programs/{program_id}` | read / edit / delete unused draft; PATCH/DELETE require program `If-Match` |
-| `POST` | `/programs/{program_id}/activate` | explicit activation/replacement; idempotency + `If-Match`; `200` |
-| `POST` | `/programs/{program_id}/archive` | archive; `If-Match`; `200` |
-| `GET`, `POST` | `/programs/{program_id}/days` | list / add day; mutation requires program `If-Match` |
-| `GET`, `PATCH`, `DELETE` | `/programs/{program_id}/days/{day_id}` | read / edit / archive/remove day; mutation requires program `If-Match` |
-| `PUT` | `/programs/{program_id}/days/order` | complete ordered active-day ID list; program `If-Match` |
-| `GET`, `POST` | `/programs/{program_id}/days/{day_id}/exercises` | list / add prescription; mutation requires program `If-Match` |
-| `GET`, `PATCH`, `DELETE` | `/programs/{program_id}/days/{day_id}/exercises/{item_id}` | prescription operations; mutation requires program `If-Match` |
-| `PUT` | `/programs/{program_id}/days/{day_id}/exercises/order` | complete ordered active-item ID list; program `If-Match` |
+| `GET`, `PATCH`, `DELETE` | `/programs/{id}` | full aggregate read / edit / archive; mutations require `If-Match` |
+| `POST` | `/programs/{id}/duplicate` | create an independent draft with fresh IDs; optional `{ "name": ... }`; `201` |
+| `POST` | `/programs/{id}/activate` | atomically replace the active program; empty body and `If-Match`; `200` |
 
-Filters: `status`, `updated_from`, and cursor. `include_archived` is explicit.
+List filters are `status`, `include_archived`, `limit`, and `cursor`; unknown/repeated fields are rejected. List rows are summaries without `days`; item GET and mutation responses contain the full aggregate.
 
-Activation request includes `replaces_program_id` when another program is active. The server rejects an implicit replacement. The transaction moves the current active program to `inactive`, activates the target, and increments affected versions. Archived programs must be restored to inactive/draft through a separately documented future action rather than implicitly activated.
+Days and their exercises are supplied as bounded ordered arrays on create or in PATCH `days`. Positions must be exactly contiguous and one-based in array order. Sending `days` replaces the active tree transactionally: old day/item rows are archived, new rows receive fresh UUIDs, and the root version increments once. Omitting `days` leaves the tree unchanged; an empty array intentionally makes a draft non-activatable and is rejected for an already active program.
 
-Activation's primary ETag is for the target program; response data explicitly contains target ID/version and replaced program ID/resulting version so clients invalidate/refetch both.
+Activation locks all of the user's program roots in stable UUID order, validates the target aggregate and referenced exercises, deactivates the old active root, and activates the target in one transaction. The partial unique index on active programs is the final authority. Archived programs cannot be activated. Clients must invalidate/refetch the program collection because replacement also increments the previous active root's version.
 
-Active programs are version-editable by the user. Workout snapshots protect history. A confirmed AI proposal may also edit the current active program, but only through the coach confirmation flow.
+DELETE archives rather than physically deletes. Full-tree replacement also archives superseded children. These rules, plus `NO ACTION` history foreign keys and workout snapshots, permit active-program edits without breaking instantiated or completed workouts. A confirmed future AI proposal may edit a program only through the coach confirmation flow.
 
 ### 8.2 Program representation
 
@@ -224,7 +210,7 @@ Active programs are version-editable by the user. Workout snapshots protect hist
           "id": "018f4ed1-8391-7e66-92c8-1014e0d9c908",
           "exercise_id": "018f4edb-a398-73d7-a474-382c893a8e16",
           "position": 1,
-          "target_sets": 3,
+          "working_sets": 3,
           "target_reps_min": 5,
           "target_reps_max": 8,
           "target_rir": 2.0,

@@ -15,3 +15,25 @@ func UUID() (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
 }
+
+// ValidUUID validates the canonical textual UUID form accepted by PostgreSQL.
+func ValidUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if value[index] != '-' {
+				return false
+			}
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
+}

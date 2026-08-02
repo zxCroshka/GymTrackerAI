@@ -14,11 +14,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/auth"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/exercise"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/measurement"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/config"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/database"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/httpserver"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/logging"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/program"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/user"
 )
 
@@ -68,11 +70,19 @@ func run() error {
 	}
 	authHandler := auth.NewHandler(authService, cfg.Auth, logger)
 	userHandler := user.NewHandler(userService, logger)
+	exerciseRepository := exercise.NewRepository(pool)
+	exerciseService := exercise.NewService(pool, exerciseRepository)
+	exerciseHandler := exercise.NewHandler(exerciseService, logger)
+	programRepository := program.NewRepository(pool)
+	programService := program.NewService(pool, programRepository, exerciseService)
+	programHandler := program.NewHandler(programService, logger)
 	registerAPI := func(router chi.Router) {
 		authHandler.RegisterRoutes(router)
 		router.Group(func(private chi.Router) {
 			private.Use(authService.Middleware)
 			userHandler.RegisterRoutes(private)
+			exerciseHandler.RegisterRoutes(private)
+			programHandler.RegisterRoutes(private)
 		})
 	}
 

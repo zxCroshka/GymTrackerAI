@@ -17,7 +17,7 @@ Last updated: 2026-08-02
 - Every foreign-key column has a supporting index unless it is already the leading part of a unique/primary index.
 - JSONB is limited to versioned document snapshots: typed coach proposals, minimized tool audit summaries, report metrics, and idempotent response replay. Core training data remains relational.
 
-The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds the implemented typed profile/import fields and normalized notes. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
+The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds typed profile/import fields and normalized notes. `000003_add_exercise_capabilities` adds the controlled exercise type, equipment/muscle allowlists, tracking capabilities, and catalogue filter index. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
 
 ## 2. Tenant isolation pattern
 
@@ -145,9 +145,14 @@ Constraints/indexes: `UNIQUE (id, user_id, family_id)`; the replacement relation
 | `description` | `text` | yes | bounded free text |
 | `instructions` | `text` | yes | bounded free text; excluded from AI tools by default |
 | `primary_muscle_group` | `text` | yes | filterable controlled value |
+| `exercise_type` | `text` | no | `strength`, `cardio`, `stretching`, `bodyweight`, `isometric` |
 | `equipment` | `text` | yes | filterable controlled value |
 | `movement_pattern` | `text` | yes | filterable controlled value |
 | `is_unilateral` | `boolean` | no | default false |
+| `tracks_weight` | `boolean` | no | one of the four tracking flags must be true |
+| `tracks_repetitions` | `boolean` | no | one of the four tracking flags must be true |
+| `tracks_time` | `boolean` | no | one of the four tracking flags must be true |
+| `tracks_distance` | `boolean` | no | one of the four tracking flags must be true |
 | `version` | `bigint` | no | default 1, `> 0` |
 | `archived_at` | `timestamptz` | yes | custom exercise archive; global managed operationally |
 | `created_at` | `timestamptz` | no | UTC |
@@ -158,9 +163,9 @@ Partial expression indexes enforce case-insensitive uniqueness separately:
 - `UNIQUE (lower(name)) WHERE owner_user_id IS NULL`;
 - `UNIQUE (owner_user_id, lower(name)) WHERE owner_user_id IS NOT NULL AND archived_at IS NULL`.
 
-Additional indexes: `(owner_user_id, archived_at)`, searchable normalized name. Program/workout FKs use `ON DELETE NO ACTION`; referenced exercises are archived, not hard-deleted during normal use.
+Controlled equipment values are `barbell`, `dumbbell`, `machine`, `cable`, `pullup_bar`, `parallel_bars`, `bodyweight`, and `other`. Muscle groups are the allowlist in `docs/openapi.yaml`. Additional indexes are `(owner_user_id, archived_at)`, searchable normalized name, and `(exercise_type, equipment, primary_muscle_group, id)`. Program/workout FKs use `ON DELETE NO ACTION`; referenced exercises are archived, not hard-deleted during normal use.
 
-System catalogue data is installed separately from schema migration by the idempotent `cmd/dbseed` mechanism. The foundation includes only three deterministic baseline exercises with stable UUIDs; expansion requires reviewed seed data and does not require a schema migration.
+System catalogue data is installed separately from schema migration by the idempotent `cmd/dbseed` mechanism. It currently installs 19 reviewed exercises with stable UUIDs, including the required strength, bodyweight, isometric, running, walking, and table-tennis entries. Re-running the seed changes only rows whose reviewed catalogue values differ and restores an operationally archived system row.
 
 ### 5.2 `programs` (`program` module)
 
@@ -179,7 +184,7 @@ System catalogue data is installed separately from schema migration by the idemp
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Constraints/indexes: `UNIQUE (id, user_id)` for tenant FKs; `UNIQUE (user_id) WHERE status = 'active'`; `(user_id, status, updated_at DESC)`. Activation locks the existing active program and target, explicitly moves the old one to `inactive`, and activates the target atomically.
+Constraints/indexes: `UNIQUE (id, user_id)` for tenant FKs; `UNIQUE (user_id) WHERE status = 'active'`; `(user_id, status, updated_at DESC)`. Activation locks all program roots for the owner in stable UUID order, explicitly moves the old active root to `inactive`, and activates the target atomically. Locking every owner root serializes concurrent activation even when no active row existed at transaction start; the partial unique index remains authoritative.
 
 ### 5.3 `program_days` (`program` module)
 
@@ -191,11 +196,11 @@ Constraints/indexes: `UNIQUE (id, user_id)` for tenant FKs; `UNIQUE (user_id) WH
 | `position` | `smallint` | no | `> 0` |
 | `name` | `text` | no | non-empty |
 | `notes` | `text` | yes | bounded |
-| `archived_at` | `timestamptz` | yes | normal DELETE semantics if referenced |
+| `archived_at` | `timestamptz` | yes | preserves old tree revisions referenced by history |
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Constraints/indexes: `UNIQUE (id, user_id)`; partial `UNIQUE (program_id, position) WHERE archived_at IS NULL`; `(program_id, user_id)`; `(user_id, program_id)`. Position changes are transactionally reordered without temporary uniqueness collisions.
+Constraints/indexes: `UNIQUE (id, user_id)`; partial `UNIQUE (program_id, position) WHERE archived_at IS NULL`; `(program_id, user_id)`; `(user_id, program_id)`. The current API replaces a submitted full tree rather than mutating positions in place: superseded rows are archived, then a validated contiguous one-based tree with fresh UUIDs is inserted in the same transaction. This avoids temporary uniqueness collisions and preserves workout provenance.
 
 ### 5.4 `program_day_exercises` (`program` module)
 
@@ -499,6 +504,8 @@ For first generation, the pending row is current because no prior artifact exist
 
 ### 9.2 `idempotency_keys` (platform support)
 
+The table is reserved by the agreed schema, but no implemented transport currently writes it. Durable replay must be added as one concrete platform component before any route advertises `Idempotency-Key`; process-memory substitutes are forbidden.
+
 This table does not store login, refresh, or other credential-bearing responses.
 
 | Column | Type | Null | Rules |
@@ -620,7 +627,7 @@ Canonical text limits are synchronized in OpenAPI/backend and duplicated as data
 
 - `golang-migrate` owns numbered up/down execution. The initial migration creates all documented tables in ownership order and indexes explicitly; rollback drops them in strict reverse order.
 - The API never auto-migrates. Compose runs a single one-shot `migrate` service after PostgreSQL becomes healthy, and backend startup waits for its successful completion.
-- PostgreSQL integration tests apply the schema to an empty disposable database, test UTC sessions, transaction commit/rollback, a cross-user composite-FK failure and idempotent seed behavior, then execute the full rollback.
-- `make migrate-down` rolls back one migration. With only the initial migration present, that removes the complete application schema and must never target a non-disposable database unintentionally.
+- PostgreSQL integration tests apply the schema to an empty disposable database, test UTC sessions, transaction commit/rollback, cross-user isolation, idempotent seed behavior, exercise/program lifecycle and history retention, then execute the full rollback.
+- `make migrate-down` rolls back one migration and must never target a non-disposable database unintentionally.
 - Before later migrations add indexes or constraints to populated tables, assess lock duration and provide an upgrade test from the preceding version.
 - pgx v5.7.2 and golang-migrate v4.18.2 are pinned because their declared minimum Go versions remain compatible with Go 1.22.2.

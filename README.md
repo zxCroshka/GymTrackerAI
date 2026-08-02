@@ -43,12 +43,14 @@ The monorepo now contains a working technical foundation:
 - a pgxpool PostgreSQL connection with bounded connect/ping timeouts, configurable pool limits, UTC sessions, startup ping, clean shutdown, and database-aware `GET /health/ready`;
 - complete numbered golang-migrate forward/rollback SQL for the agreed normalized schema, plus a separate one-shot Compose migration service;
 - production auth/profile foundations: Argon2id passwords, short-lived access JWTs, hashed rotating refresh JWT cookies with replay invalidation, protected routes, strict profile update/import, and metadata-only security audit for refresh replay;
-- an idempotent seed command with a small deterministic baseline system exercise catalogue and a concrete pgx transaction helper;
+- an idempotent seed command with 19 deterministic reviewed system exercises and a concrete pgx transaction helper;
+- authenticated exercise catalogue routes for system/owned exercises, literal search, controlled filters, capability filters, cursor pagination, custom creation/update, and history-safe archive;
+- authenticated full-aggregate program routes for create/read/update/archive, duplication, and transactional activation with one active program per user;
 - `GET /health/live` and `GET /health/ready` operational endpoints;
 - a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
 - reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
 
-Exercise, program, workout, progress, report, and AI Coach use cases remain intentionally unimplemented. The only measurement write currently exposed is the initial measurement created transactionally by authenticated profile import. No frontend auth/profile forms were added in this backend stage.
+Workout, progress, report, and AI Coach use cases remain intentionally unimplemented. The only measurement write currently exposed is the initial measurement created transactionally by authenticated profile import. No exercise/program frontend screens were added in this backend stage.
 
 ## Local development
 
@@ -88,7 +90,7 @@ curl http://localhost:8080/health/live
 curl http://localhost:8080/health/ready
 ```
 
-Implemented API routes are `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/profile`, `PATCH /api/v1/profile`, and `POST /api/v1/profile/import`. Exact schemas, cookie behavior, ETag preconditions, and import examples are in `docs/openapi.yaml`.
+Implemented API route groups are auth (`register`, `login`, `refresh`, `logout`), own profile (`GET`, `PATCH`, `import`), exercises (`GET/POST /api/v1/exercises`, `GET/PATCH/DELETE /api/v1/exercises/{id}`), and programs (`GET/POST /api/v1/programs`, `GET/PATCH/DELETE /api/v1/programs/{id}`, `duplicate`, `activate`). Exact schemas, filters, cookie behavior, archive rules, and ETag preconditions are in `docs/openapi.yaml`.
 
 Registration returns an access token in JSON and sets the raw refresh token only as an HttpOnly cookie:
 
@@ -105,7 +107,7 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 - `make backend-run` — run the API locally.
 - `make backend-test` — run Go tests.
-- `make backend-integration-test` — run migration and auth/user integration tests against the dedicated disposable database in `TEST_DATABASE_URL`; tests perform full up/down.
+- `make backend-integration-test` — run migration, auth/user, exercise/program integration tests against the dedicated disposable PostgreSQL database in `TEST_DATABASE_URL`; tests perform full up/down.
 - `make backend-fmt` — format Go files.
 - `make frontend-dev` — run the Next.js development server.
 - `make frontend-test` — run frontend unit tests.
@@ -119,6 +121,6 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 Schema migration is never performed by API startup. The Compose `backend` service depends on successful completion of the one-shot `migrate` service, so multiple API replicas cannot race to migrate the database.
 
-PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs migration plus auth/user repository/HTTP scenarios with PostgreSQL 16.
+PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs migration, auth/user, and exercise/program repository/HTTP scenarios with PostgreSQL 16.
 
-Docker and the Compose plugin are installed in the current development environment, but the current user may not be able to access the Docker daemon. Do not use `sudo` or alter host permissions; `docker compose --env-file .env.example config --quiet` can still validate the Compose file statically. Without daemon access, container builds and PostgreSQL-backed integration execution cannot run locally and must be reported explicitly.
+Docker and the Compose plugin are installed in the current development environment, but daemon availability can vary by session. Try Docker-backed integration checks when relevant; never use `sudo` or alter host permissions. If daemon access actually fails, `docker compose --env-file .env.example config --quiet` still validates Compose statically and the blocked container checks must be reported explicitly.

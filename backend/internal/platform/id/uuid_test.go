@@ -22,3 +22,14 @@ func TestUUID(t *testing.T) {
 		t.Fatal("two UUIDs are equal")
 	}
 }
+
+func TestValidUUID(t *testing.T) {
+	if !ValidUUID("00000000-0000-4000-8000-000000000001") {
+		t.Fatal("valid UUID rejected")
+	}
+	for _, value := range []string{"", "not-a-uuid", "000000000000-4000-8000-000000000001", "00000000-0000-4000-8000-00000000000z"} {
+		if ValidUUID(value) {
+			t.Fatalf("invalid UUID accepted: %q", value)
+		}
+	}
+}

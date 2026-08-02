@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: executable foundation plus backend auth/profile slice implemented; later product slices sequenced
+Status: executable foundation plus backend auth/profile/exercise/program slices implemented; later product slices sequenced
 
 Last updated: 2026-08-02
 
@@ -15,7 +15,7 @@ The modular-monolith boundaries in `architecture.md`, schema in `database-schema
 - Backend must compile and test with installed Go `1.22.2`. Check dependency `go` directives/release notes before selection or upgrade; never let tooling silently require a newer Go version.
 - Frontend uses installed Node.js 22, npm 10, and an npm lockfile. Do not use pnpm, Yarn, or Bun.
 - Use `docker compose`, not `docker-compose`.
-- Docker CLI/Compose are installed, but the current user cannot reach the Docker daemon. Do not use `sudo` or modify host permissions. PostgreSQL/container integration checks remain an explicitly reported environment blocker until access is supplied.
+- Docker CLI/Compose are installed. Daemon availability is session-dependent: always try Docker-backed integration checks, never use `sudo` or modify host permissions, and report an actual access failure explicitly rather than assuming one.
 - Foundation dependencies are locked in `backend/go.sum` and `frontend/package-lock.json`, including pgx v5.7.2 and golang-migrate v4.18.2 with compatible Go directives.
 - At the user's explicit request, the complete agreed schema was migrated before business-module implementation. This changes sequencing, not module ownership: no empty business layers or handlers were introduced, and each later vertical slice must test and use its owned existing tables. Future schema changes use incremental migrations.
 
@@ -87,12 +87,14 @@ Exit gate: two fixture users cannot discover or mutate one another; all document
 
 ## 6. Phase 3 — exercise catalogue and programs
 
+Current completion: the requested backend slice is implemented. It includes the tenant-safe searchable system/custom catalogue, 19-entry idempotent system seed, archive semantics, full program aggregate create/read/update/archive/duplicate/activate, contiguous ordering validation, ETags, transactional tree replacement, transactional single-active switching, OpenAPI/docs, and unit/PostgreSQL integration tests. Program/exercise frontend screens and custom-exercise restore remain future work.
+
 Deliverables:
 
 - exercise/program persistence against existing checked, tenant-safe foundation tables;
 - seed strategy for reviewed global exercises (deterministic data, not migration-time network calls);
-- search/filter and owned custom-exercise archive/restore;
-- complete program aggregate CRUD, ordering, version/ETag, active replacement, inactive/archive lifecycle;
+- search/filter and owned custom-exercise archive; restore is a later lifecycle addition;
+- complete program aggregate CRUD, duplicate, ordering, version/ETag, active replacement, inactive/archive lifecycle;
 - Next.js exercise picker/custom form, program list/editor/reordering and conflict UX;
 - OpenAPI and accessible forms with canonical-value validation.
 
@@ -100,10 +102,10 @@ Verification:
 
 - unit tests for prescription and lifecycle rules;
 - integration tests for global/custom visibility, cross-user references, archive/history constraints, one-active-program invariant, concurrent reorder/edit/activate and root version increments;
-- API/filter/cursor/idempotency/ETag tests;
+- API/filter/cursor/ETag tests, with ambiguous duplicate retry behavior documented until durable replay is implemented;
 - frontend keyboard ordering/accessibility, form and `412` refresh-flow tests.
 
-Exit gate: a user can create and activate a valid multi-day program; database constraints reject cross-user or invalid prescriptions.
+Backend exit gate reached: a user can create and activate a valid multi-day program; application/database constraints reject cross-user or invalid prescriptions and retain superseded/history rows. The phase remains open only for its planned frontend UX.
 
 ## 7. Phase 4 — workout logging and history
 

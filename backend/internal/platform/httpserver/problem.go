@@ -39,15 +39,26 @@ func writeJSON(w http.ResponseWriter, status int, contentType string, body any) 
 }
 
 type successEnvelope struct {
-	Data any `json:"data"`
-	Meta struct {
-		RequestID string `json:"request_id"`
-	} `json:"meta"`
+	Data any         `json:"data"`
+	Meta successMeta `json:"meta"`
+}
+
+type successMeta struct {
+	RequestID  string  `json:"request_id"`
+	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
 // WriteData wraps successful data with request correlation metadata.
 func WriteData(w http.ResponseWriter, r *http.Request, status int, data any) {
 	response := successEnvelope{Data: data}
 	response.Meta.RequestID = requestIDFromContext(r.Context())
+	writeJSON(w, status, "application/json", response)
+}
+
+// WriteCollection writes an array response and optional cursor metadata.
+func WriteCollection(w http.ResponseWriter, r *http.Request, status int, data any, nextCursor *string) {
+	response := successEnvelope{Data: data}
+	response.Meta.RequestID = requestIDFromContext(r.Context())
+	response.Meta.NextCursor = nextCursor
 	writeJSON(w, status, "application/json", response)
 }
