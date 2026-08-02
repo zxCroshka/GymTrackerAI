@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: executable foundation plus backend auth/profile/exercise/program slices implemented; later product slices sequenced
+Status: executable foundation plus backend auth/profile/exercise/program/workout slices implemented; later product slices sequenced
 
 Last updated: 2026-08-02
 
@@ -109,23 +109,32 @@ Backend exit gate reached: a user can create and activate a valid multi-day prog
 
 ## 7. Phase 4 — workout logging and history
 
+Current completion: the requested backend slice is implemented. It provides owner-scoped start from an active program day or ad-hoc start, one persisted in-progress workout, history/detail/active reads, metadata updates, nested exercise/set CRUD, previous exercise results, state-idempotent completion, CSV export, and explicit hard deletion. Completed workouts remain completed with a valid non-null completion instant while their owner makes an explicit ETag-protected correction in one transaction. Workout volume and Epley estimated 1RM for sets with at most 15 repetitions are calculated dynamically from persisted source sets in the current slice; progress projections and weekly-report invalidation remain future module integrations rather than placeholder behavior.
+
 Deliverables:
 
-- workout persistence against existing snapshot/tenant/version-constrained foundation tables;
-- create blank/planned workout and instantiate from authorized program day/version;
-- start, ordered exercise/set edits, complete/cancel, explicit reopen/correction and history filters;
-- transactional immutable snapshots and root ETag increments;
+- workout persistence against the snapshot-, tenant-, capability-, and version-constrained tables, extended through an incremental migration;
+- transactional start from a current day of the authenticated user's active program, including copied program/exercise snapshots, or ad-hoc start without a program source;
+- owner-scoped list, active, aggregate detail, strict metadata PATCH, nested exercise/set CRUD, previous-result lookup, and bounded CSV export;
+- at most one `in_progress` workout per user, with the database partial unique index as final authority;
+- state-idempotent completion: retrying completion of the same owned completed aggregate returns its completed representation without changing completion time, version, or derived facts again;
+- direct owner-only corrections of completed workout metadata and children, guarded by the root ETag and one transaction while preserving completed status and a valid non-null completion instant;
+- dynamically calculated workout volume and calculation-versioned Epley estimated 1RM, with Epley excluded above 15 repetitions;
+- explicit owner-authorized hard deletion of a workout and database-cascaded child rows; it is never an archive, background cleanup, or implicit lifecycle transition;
+- immutable source snapshots under later program/exercise edits and exactly one root ETag increment per successful aggregate mutation;
 - Next.js active-workout logging optimized for common set entry, history/detail, error/retry/offline-not-supported messaging;
-- OpenAPI for all lifecycle/nested operations.
+- synchronized OpenAPI for all implemented lifecycle, nested, previous-result, and export operations.
+
+The current backend intentionally has no fake progress, personal-record, or report hooks. Once those modules exist, completion, direct completed correction, and hard deletion must call their narrow public ports in the same transaction to recalculate affected projections and mark every affected report period stale.
 
 Verification:
 
-- unit tests for states, set validation, RIR/unit/time rules and snapshot creation;
-- integration tests for source visibility, snapshot immutability after program/exercise edits, one-in-progress invariant, concurrent tree changes, invalid completed edits, complete/reopen/cancel/delete and idempotency;
-- HTTP pagination/filter/ETag/problem tests;
+- unit tests for lifecycle/state-idempotent completion, capability-aware set validation, score/RIR/unit/time rules, volume/Epley boundaries, and snapshot creation;
+- integration tests for owner isolation, source visibility, snapshot immutability after program/exercise edits, one-in-progress races, concurrent aggregate changes, direct completed corrections, completion retries, and hard-delete cascades;
+- HTTP pagination/filter/active/previous/export, ETag, CSV, and problem-response tests;
 - frontend rapid-entry, duplicate click/retry, keyboard/mobile viewport and accessible status tests.
 
-Exit gate: program-to-completed-workout-to-history journey is reliable and later program edits cannot alter the recorded workout.
+Backend exit gate reached: program-to-completed-workout-to-history is reliable, completion is safe to retry by state, direct completed corrections are transactional and versioned, deletion is an explicit owner action, and later program edits cannot alter the workout snapshot. The phase remains open for its planned frontend UX; progress projections and report invalidation are delivered in their owning later phases.
 
 ## 8. Phase 5 — measurements and progress
 
@@ -133,9 +142,9 @@ Deliverables:
 
 - measurement/progress persistence against existing foundation tables;
 - body/wellness CRUD with item ETags, canonical units, backend-calculated UTC/IANA civil-day boundary and uniqueness;
-- deterministic personal-record recalculation tied to workout completion/reopen;
+- deterministic personal-record recalculation tied to workout completion, direct completed correction, and explicit deletion through a narrow transactional progress port;
 - bounded progress summary, body, volume, exercise and record endpoints with calculation versions;
-- decision and fixtures for the default estimated-1RM formula;
+- persisted-projection fixtures for the documented calculation-versioned Epley formula and its 15-repetition eligibility boundary;
 - Next.js measurement/wellness forms, progress filters, accessible Recharts plus text/table equivalents.
 
 Verification:
@@ -155,7 +164,7 @@ Deliverables:
 - report persistence against the existing revisioned `weekly_reports` table and source indexes;
 - deterministic metric schema/version, UTC week-boundary calculation from profile IANA zone, pending/generating/ready/failed/stale states;
 - internal runner claim/lease/retry/backpressure behavior with attempt fencing and idempotent generation/regeneration;
-- capture deterministic metrics/cutoff in one short repeatable-read snapshot, preserve old current artifact until a replacement is ready, and mark reports stale on every affecting workout/measurement/wellness source mutation;
+- capture deterministic metrics/cutoff in one short repeatable-read snapshot, preserve old current artifact until a replacement is ready, and mark reports stale on every affecting workout completion/direct correction/deletion or measurement/wellness source mutation;
 - Next.js current/revision/status/metrics/source-link UI;
 - AI insight field/status supported but disabled/not requested until coach infrastructure is production-ready.
 
@@ -264,7 +273,7 @@ A slice is ready when:
 | Risk | Mitigation |
 |---|---|
 | Cross-user data leak | tenant-safe FKs, mandatory scoped APIs, IDOR matrix for REST and every coach tool |
-| History corrupted by program edits | workout snapshots, archive referenced catalogue/plan rows, explicit reopen/recalculation |
+| History corrupted by program edits or unsafe corrections | immutable source snapshots under later program/exercise edits; owner-only ETag-protected direct corrections in one transaction; future projection recalculation/report staleness ports |
 | Duplicate/lost concurrent changes | transactions, root versions/ETags, idempotency records, row locks |
 | Time-zone/DST report errors | store UTC boundaries + zone snapshot, half-open intervals, 167/169-hour fixtures |
 | Go ecosystem moves beyond 1.22 | dependency compatibility gate, pin versions, planned Go upgrade rather than implicit change |

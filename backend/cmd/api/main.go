@@ -22,6 +22,7 @@ import (
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/logging"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/program"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/user"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/workout"
 )
 
 func main() {
@@ -76,6 +77,9 @@ func run() error {
 	programRepository := program.NewRepository(pool)
 	programService := program.NewService(pool, programRepository, exerciseService)
 	programHandler := program.NewHandler(programService, logger)
+	workoutRepository := workout.NewRepository(pool)
+	workoutService := workout.NewService(pool, workoutRepository, programService, exerciseService)
+	workoutHandler := workout.NewHandler(workoutService, logger)
 	registerAPI := func(router chi.Router) {
 		authHandler.RegisterRoutes(router)
 		router.Group(func(private chi.Router) {
@@ -83,6 +87,7 @@ func run() error {
 			userHandler.RegisterRoutes(private)
 			exerciseHandler.RegisterRoutes(private)
 			programHandler.RegisterRoutes(private)
+			workoutHandler.RegisterRoutes(private)
 		})
 	}
 

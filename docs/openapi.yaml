@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: GymTracker AI API
-  version: 0.3.0
-  description: Implemented auth, user-profile, exercise catalogue, and training-program contract. All instants are UTC RFC 3339 values.
+  version: 0.4.0
+  description: Auth, user-profile, exercise catalogue, training-program, and workout contract. All instants are UTC RFC 3339 values.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -536,6 +536,503 @@ paths:
           $ref: "#/components/responses/Problem"
         "428":
           $ref: "#/components/responses/Problem"
+  /workouts:
+    get:
+      tags: [workout]
+      operationId: listWorkouts
+      description: Returns owned workout summaries ordered by event_at and UUID descending.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/WorkoutStatus" }
+        - name: from
+          in: query
+          description: Inclusive event_at lower bound.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Exclusive event_at upper bound.
+          schema: { type: string, format: date-time }
+        - name: program_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: exercise_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Filtered workout summaries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutCollectionEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [workout]
+      operationId: createWorkout
+      description: Starts an in-progress workout by default or creates an explicit planned workout. Durable Idempotency-Key replay is not advertised.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutCreate" }
+      responses:
+        "201":
+          description: Workout created with its authorized program/exercise snapshots when applicable.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "409":
+          description: Another workout is already in progress.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+  /workouts/active:
+    get:
+      tags: [workout]
+      operationId: getActiveWorkout
+      description: Returns the sole owned in-progress workout, or null data when none exists.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Active workout lookup completed. ETag is present only when data is non-null.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActiveWorkoutEnvelope" }
+        "401":
+          $ref: "#/components/responses/Problem"
+  /workouts/export.csv:
+    get:
+      tags: [workout]
+      operationId: exportWorkoutsCSV
+      description: Exports filtered owned workout data as bounded RFC 4180 CSV in chronological order. This response does not use the JSON success envelope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/WorkoutStatus" }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: program_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: exercise_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: UTF-8 CSV using the stable column order documented in api-contract.md; one row per set with empty set columns retained for matching workouts/exercises without sets.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              example: attachment; filename="gymtracker-workouts-20260802T120000Z.csv"
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Request-ID:
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "500":
+          $ref: "#/components/responses/Problem"
+  /workouts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [workout]
+      operationId: getWorkout
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Full owned workout aggregate with ordered exercises and sets.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutEnvelope" }
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+    patch:
+      tags: [workout]
+      operationId: updateWorkout
+      description: Strict partial edit. Completed workouts are directly correctable; status completion still uses the complete operation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutPatch" }
+      responses:
+        "200":
+          description: Workout updated and root version incremented once.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [workout]
+      operationId: deleteWorkout
+      description: Physically deletes an owned workout in any status and cascades its children. Future projection/report modules must join this transaction once implemented.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: Workout deleted.
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /workouts/{id}/complete:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    post:
+      tags: [workout]
+      operationId: completeWorkout
+      description: Transitions an in-progress workout to completed. Empty workouts are valid. Every call requires a syntactically valid same-root workout If-Match; the initial transition requires the current version, while the already-completed no-write branch deliberately accepts any version for that same root and returns the current unchanged aggregate without repeating derived effects.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutComplete" }
+      responses:
+        "200":
+          description: Newly or previously completed unchanged workout.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /workouts/{id}/exercises:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    post:
+      tags: [workout]
+      operationId: addWorkoutExercise
+      description: Adds a visible non-archived exercise and increments the containing workout version once.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutExerciseCreate" }
+      responses:
+        "201":
+          description: Workout exercise created. ETag is the new containing-workout validator.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutExerciseEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /workout-exercises/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    patch:
+      tags: [workout]
+      operationId: updateWorkoutExercise
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutExercisePatch" }
+      responses:
+        "200":
+          description: Item updated or moved. ETag is the new containing-workout validator.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutExerciseEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [workout]
+      operationId: deleteWorkoutExercise
+      description: Removes the item and compacts sibling positions. Cancelled workout trees are immutable.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: Item deleted. ETag is the new containing-workout validator.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /workout-exercises/{id}/previous-result:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [workout]
+      operationId: getPreviousWorkoutExerciseResult
+      description: Returns the most recent earlier completed occurrence of the anchor item's exercise, or null data when no earlier result exists.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Previous-result lookup completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreviousWorkoutExerciseResultEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+  /workout-exercises/{id}/sets:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    post:
+      tags: [workout]
+      operationId: addWorkoutSet
+      description: Adds a performed set after checking actual metrics against the anchor exercise's snapshotted tracking capabilities.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutSetCreate" }
+      responses:
+        "201":
+          description: Set created. ETag is the new containing-workout validator.
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutSetEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /workout-sets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    patch:
+      tags: [workout]
+      operationId: updateWorkoutSet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkoutSetPatch" }
+      responses:
+        "200":
+          description: Set updated or moved. ETag is the new containing-workout validator.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkoutSetEnvelope" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [workout]
+      operationId: deleteWorkoutSet
+      description: Removes the set and compacts sibling set numbers. Cancelled workout trees are immutable.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: Set deleted. ETag is the new containing-workout validator.
+          headers:
+            ETag: { $ref: "#/components/headers/WorkoutETag" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
 components:
   securitySchemes:
     bearerAuth:
@@ -583,6 +1080,10 @@ components:
     ProgramETag:
       schema: { type: string }
       example: '"program:018f4ea8-89af-47d7-b7e3-43d94f83292e:7"'
+    WorkoutETag:
+      description: Strong validator for the workout aggregate containing the selected root, exercise, or set.
+      schema: { type: string }
+      example: '"workout:018f4ea8-89af-47d7-b7e3-43d94f83292e:9"'
   responses:
     Problem:
       description: Problem response.
@@ -1090,6 +1591,376 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Program" }
         meta: { $ref: "#/components/schemas/CollectionMeta" }
+    Workout:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - source_program_id
+        - source_program_day_id
+        - source_program_version
+        - name
+        - status
+        - event_at
+        - scheduled_at
+        - started_at
+        - completed_at
+        - cancelled_at
+        - difficulty
+        - energy
+        - mood
+        - comment
+        - has_pain
+        - discomfort
+        - exercise_count
+        - set_count
+        - working_set_count
+        - volume_kg
+        - best_estimated_1rm_kg
+        - calculation_version
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        source_program_id: { type: [string, "null"], format: uuid, description: Derived through the source program day. }
+        source_program_day_id: { type: [string, "null"], format: uuid }
+        source_program_version: { type: [integer, "null"], minimum: 1 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        status: { $ref: "#/components/schemas/WorkoutStatus" }
+        event_at:
+          type: string
+          format: date-time
+          description: started_at, otherwise scheduled_at, otherwise created_at; used for list filters and ordering.
+        scheduled_at: { type: [string, "null"], format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+        cancelled_at: { type: [string, "null"], format: date-time }
+        difficulty: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        energy: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        mood: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        has_pain: { type: [boolean, "null"], description: Null means the question was not recorded for legacy history. }
+        discomfort: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        exercise_count: { type: integer, minimum: 0, maximum: 50 }
+        set_count: { type: integer, minimum: 0 }
+        working_set_count:
+          type: integer
+          minimum: 0
+          description: Number of performed non-warmup sets.
+        volume_kg:
+          type: number
+          minimum: 0
+          description: Sum of weight_kg multiplied by reps for performed non-warmup sets.
+        best_estimated_1rm_kg: { type: [number, "null"], minimum: 0 }
+        calculation_version: { type: string, minLength: 1, maxLength: 100 }
+        version: { type: integer, minimum: 1 }
+        exercises:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/WorkoutExercise" }
+          description: Present on aggregate/active/mutation responses and omitted from list summaries.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorkoutExercise:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workout_id
+        - exercise_id
+        - source_program_day_exercise_id
+        - position
+        - exercise_name_snapshot
+        - rest_seconds
+        - comment
+        - tracks_weight
+        - tracks_repetitions
+        - tracks_time
+        - tracks_distance
+        - volume_kg
+        - best_estimated_1rm_kg
+        - sets
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        workout_id: { type: string, format: uuid }
+        exercise_id: { type: string, format: uuid }
+        source_program_day_exercise_id: { type: [string, "null"], format: uuid }
+        position: { type: integer, minimum: 1, maximum: 50 }
+        exercise_name_snapshot: { type: string, minLength: 1, maxLength: 200 }
+        rest_seconds:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 86400
+          readOnly: true
+          description: Immutable prescription snapshot; null for ad-hoc or no-rest-target items.
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        tracks_weight: { type: boolean }
+        tracks_repetitions: { type: boolean }
+        tracks_time: { type: boolean }
+        tracks_distance: { type: boolean }
+        volume_kg: { type: number, minimum: 0 }
+        best_estimated_1rm_kg: { type: [number, "null"], minimum: 0 }
+        sets:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/WorkoutSet" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorkoutSet:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workout_exercise_id
+        - set_number
+        - status
+        - target_weight_kg
+        - target_reps_min
+        - target_reps_max
+        - target_rir
+        - weight_kg
+        - reps
+        - rir
+        - warmup
+        - failure
+        - duration_seconds
+        - distance_meters
+        - note
+        - performed_at
+        - volume_kg
+        - estimated_1rm_kg
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        workout_exercise_id: { type: string, format: uuid }
+        set_number: { type: integer, minimum: 1, maximum: 100 }
+        status:
+          readOnly: true
+          allOf:
+            - $ref: "#/components/schemas/WorkoutSetStatus"
+          description: Server-derived lifecycle; clients do not write this field directly.
+        target_weight_kg: { type: [number, "null"], minimum: 0 }
+        target_reps_min: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_reps_max: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        target_rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        weight_kg: { type: [number, "null"], minimum: 0 }
+        reps: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        warmup: { type: boolean, description: True when the internal set type is warmup. }
+        failure: { type: boolean, description: True when the internal set type is failure. }
+        duration_seconds: { type: [integer, "null"], minimum: 0, maximum: 86400 }
+        distance_meters: { type: [number, "null"], minimum: 0 }
+        note: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        performed_at: { type: [string, "null"], format: date-time }
+        volume_kg:
+          type: [number, "null"]
+          minimum: 0
+          description: Null for warmup sets or when weight/repetitions are unavailable.
+        estimated_1rm_kg:
+          type: [number, "null"]
+          minimum: 0
+          description: Epley estimate only for non-warmup positive-weight sets of 1 through 15 repetitions.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WorkoutCreate:
+      type: object
+      additionalProperties: false
+      allOf:
+        - if:
+            required: [status]
+            properties:
+              status: { const: planned }
+          then:
+            properties:
+              started_at: { type: "null" }
+      oneOf:
+        - required: [program_day_id]
+          properties:
+            program_day_id: { type: string, format: uuid }
+            name: { type: "null" }
+        - required: [name]
+          properties:
+            program_day_id: { type: "null" }
+            name: { type: string, minLength: 1, maxLength: 200 }
+      properties:
+        program_day_id: { type: [string, "null"], format: uuid }
+        name: { type: [string, "null"], minLength: 1, maxLength: 200 }
+        status:
+          type: string
+          enum: [planned, in_progress]
+          default: in_progress
+        scheduled_at: { type: [string, "null"], format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        difficulty: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        energy: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        mood: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        has_pain: { type: [boolean, "null"] }
+        discomfort: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WorkoutPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        status: { type: string, enum: [in_progress, cancelled] }
+        scheduled_at: { type: [string, "null"], format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        difficulty: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        energy: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        mood: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        has_pain: { type: [boolean, "null"] }
+        discomfort: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WorkoutComplete:
+      type: object
+      additionalProperties: false
+      properties:
+        completed_at: { type: string, format: date-time }
+        difficulty: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        energy: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        mood: { type: [integer, "null"], minimum: 1, maximum: 10 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        has_pain: { type: [boolean, "null"] }
+        discomfort: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WorkoutExerciseCreate:
+      type: object
+      additionalProperties: false
+      required: [exercise_id]
+      properties:
+        exercise_id: { type: string, format: uuid }
+        position: { type: integer, minimum: 1, maximum: 50 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WorkoutExercisePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        position: { type: integer, minimum: 1, maximum: 50 }
+        comment: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+    WorkoutSetCreate:
+      type: object
+      additionalProperties: false
+      anyOf:
+        - required: [weight_kg]
+        - required: [reps]
+        - required: [duration_seconds]
+        - required: [distance_meters]
+      not:
+        required: [warmup, failure]
+        properties:
+          warmup: { const: true }
+          failure: { const: true }
+      properties:
+        set_number: { type: integer, minimum: 1, maximum: 100 }
+        weight_kg: { type: number, minimum: 0 }
+        reps: { type: integer, minimum: 0, maximum: 32767 }
+        rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        warmup: { type: boolean, default: false, description: Maps true to the internal warmup set type. }
+        failure: { type: boolean, default: false, description: Maps true to the internal failure set type. }
+        duration_seconds: { type: integer, minimum: 0, maximum: 86400 }
+        distance_meters: { type: number, minimum: 0 }
+        note: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        performed_at: { type: string, format: date-time }
+    WorkoutSetPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      not:
+        required: [warmup, failure]
+        properties:
+          warmup: { const: true }
+          failure: { const: true }
+      properties:
+        set_number: { type: integer, minimum: 1, maximum: 100 }
+        weight_kg: { type: [number, "null"], minimum: 0 }
+        reps: { type: [integer, "null"], minimum: 0, maximum: 32767 }
+        rir: { type: [number, "null"], minimum: 0, maximum: 10, multipleOf: 0.1 }
+        warmup: { type: boolean, description: Maps true to the internal warmup set type. }
+        failure: { type: boolean, description: Maps true to the internal failure set type. }
+        duration_seconds: { type: [integer, "null"], minimum: 0, maximum: 86400 }
+        distance_meters: { type: [number, "null"], minimum: 0 }
+        note: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        performed_at: { type: string, format: date-time }
+    PreviousWorkoutExerciseResult:
+      type: object
+      additionalProperties: false
+      required:
+        - exercise_id
+        - exercise_name
+        - source_workout_id
+        - source_workout_exercise_id
+        - workout_name
+        - started_at
+        - completed_at
+        - sets
+      properties:
+        exercise_id: { type: string, format: uuid }
+        exercise_name: { type: string, minLength: 1, maxLength: 200 }
+        source_workout_id: { type: string, format: uuid }
+        source_workout_exercise_id: { type: string, format: uuid }
+        workout_name: { type: string, minLength: 1, maxLength: 200 }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        sets:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/WorkoutSet" }
+    WorkoutEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/Workout" }
+        meta: { $ref: "#/components/schemas/Meta" }
+    ActiveWorkoutEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/Workout"
+            - type: "null"
+        meta: { $ref: "#/components/schemas/Meta" }
+    WorkoutCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Workout" }
+        meta: { $ref: "#/components/schemas/CollectionMeta" }
+    WorkoutExerciseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/WorkoutExercise" }
+        meta: { $ref: "#/components/schemas/Meta" }
+    WorkoutSetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/WorkoutSet" }
+        meta: { $ref: "#/components/schemas/Meta" }
+    PreviousWorkoutExerciseResultEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/PreviousWorkoutExerciseResult"
+            - type: "null"
+        meta: { $ref: "#/components/schemas/Meta" }
     Meta:
       type: object
       additionalProperties: false
@@ -1140,3 +2011,9 @@ components:
     ProgramStatus:
       type: string
       enum: [draft, active, inactive, archived]
+    WorkoutStatus:
+      type: string
+      enum: [planned, in_progress, completed, cancelled]
+    WorkoutSetStatus:
+      type: string
+      enum: [planned, completed, skipped]

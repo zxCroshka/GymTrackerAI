@@ -97,7 +97,7 @@ An arrow means “uses a small public application/query port,” not permission 
 | `user` | User profile and preferences | Read/update authenticated profile; account-deletion orchestration | Verify passwords or query training tables directly |
 | `exercise` | Global and user-owned exercise catalogue | Search visible exercises; manage custom exercises; verify visibility | Modify program/workout snapshots |
 | `program` | Programs, ordered days, exercise prescriptions, versions/lifecycle | CRUD and ordering; activate/archive; apply validated commands | Rewrite completed workouts or accept model calls directly |
-| `workout` | Workout aggregate, exercise snapshots, performed sets, lifecycle | Plan/start/edit/complete/cancel/reopen; history queries | Derive arbitrary analytics in HTTP handlers |
+| `workout` | Workout aggregate, exercise snapshots, performed sets, lifecycle | Plan/start/edit/complete/cancel/correct/delete; history queries and CSV export | Derive arbitrary analytics in HTTP handlers |
 | `measurement` | Body measurements and daily wellness | CRUD and bounded history queries | Generate coach text or weekly reports |
 | `progress` | Personal records and deterministic progress calculations | Recalculate records; return bounded aggregate series | Accept manual record writes or call OpenAI |
 | `report` | Versioned weekly report snapshots and generation state | Request/generate/retry/read reports; optionally generate narrative from stored metrics | Treat AI narrative as source metrics or import coach internals |
@@ -110,8 +110,8 @@ Cross-module workflows use an application coordinator and one shared pgx transac
 - **Registration:** `auth` creates the identity and `user` creates the default profile atomically.
 - **Profile import:** `user` owns strict profile/notes validation and calls the narrow `measurement` initial-write port through composition-root wiring; profile, notes, and optional first measurement commit atomically.
 - **Program write/activation:** `program` owns one transaction and calls only the narrow `exercise.IsUsable(ctx, tx, actor, exercise)` port. The check locks each visible non-archived exercise against concurrent archival until the program transaction commits; `program` never imports exercise persistence internals.
-- **Start from program:** `workout` asks `program` for an authorized prescription snapshot and `exercise` for visible metadata, then owns the copied workout rows.
-- **Complete/reopen workout:** `workout` validates and changes status; `progress` recalculates affected personal records. Any completion/correction affecting an already generated period marks its current report stale. The coordinator commits all changes together.
+- **Start from program:** `workout` asks `program` for an authorized prescription snapshot and `exercise` for visible metadata, then owns the copied workout rows. These narrow snapshot reads use shared row locks that conflict with the source modules' versioned update/archive locks, so one workout transaction copies a wholly old or wholly new source tree rather than mixed metadata.
+- **Complete/correct workout:** `workout` validates and completes the aggregate transactionally. A later authenticated PATCH or child mutation on an owned completed workout is the explicit correction workflow selected for the implemented API; it preserves `completed` status, increments the root version once, and must invoke `progress` recalculation and `report` staleness ports once those projections are implemented.
 - **Source measurement/wellness mutation:** `measurement` changes the owned row and marks every current report covering the event/day before or after the mutation stale in the same transaction.
 - **Generate report:** `report` captures one `REPEATABLE READ` snapshot/cutoff, gets bounded deterministic aggregates through `workout`, `measurement`, and `progress` query ports, and commits an immutable metric snapshot. It then optionally sends only a specialized safe backend-context projection of those stored metrics to its narrative-generator port. When the second OpenAI use is implemented, only redacted HTTP/auth transport is shared under `platform/openai`; report prompting remains in `report`, so `report` and `coach` do not depend on one another.
 - **Confirm recommendation:** `coach` locks and validates the recommendation; `program` validates and applies the typed command against the base version; `coach` marks it applied in the same transaction.
@@ -121,13 +121,13 @@ In-process notifications are allowed after commit for non-critical wakeups, but 
 ## 5. Key domain aggregates
 
 - **Program aggregate:** `programs` root with `program_days` and `program_day_exercises`. Any nested mutation increments `programs.version` and changes its ETag.
-- **Workout aggregate:** `workouts` root with `workout_exercises` and `workout_sets`. Any nested mutation increments `workouts.version`. Completed snapshots are immutable until an explicit reopen transition.
+- **Workout aggregate:** `workouts` root with `workout_exercises` and `workout_sets`. Any nested mutation increments `workouts.version`. Program/exercise changes never rewrite its snapshots; an authenticated user may explicitly correct an owned completed aggregate through versioned workout PATCH/child routes.
 - **Coach recommendation aggregate:** recommendation root plus immutable structured proposal, decision metadata, target/base version, and apply result.
 - **Weekly report aggregate:** an immutable revision for one user/week with deterministic metrics, input cutoff, optional AI insight, and generation state.
 
 Database constraints enforce local invariants; application services enforce cross-row and cross-module transitions. Full details are in `database-schema.md`.
 
-The first release permits at most one `in_progress` workout per user. The database partial unique index is authoritative; start/reopen translates its conflict into `409 workout_already_in_progress` rather than cancelling or merging sessions.
+The first release permits at most one `in_progress` workout per user. The database partial unique index is authoritative; create/start translates its conflict into `409 workout_already_in_progress` rather than cancelling or merging sessions.
 
 ## 6. Time, units, and numeric rules
 
@@ -251,6 +251,7 @@ Metrics should cover request latency/error rates, pgx pool pressure/query durati
 | Access token storage | Browser memory; refresh token HttpOnly cookie | Reduces token theft persistence/CSRF surface; reload needs refresh bootstrap and private SSR is limited |
 | Canonical units | kg/cm in DB and API | Simple analytics; clients must correctly convert and label imperial input/output |
 | Program editing API | Full aggregate tree on create and optional PATCH replacement | Fewer routes and atomic ordering validation; larger payloads and fresh child UUIDs require editor refetch after save |
+| Completed workout corrections | Direct versioned PATCH/child mutations retain `completed` status | Matches the requested compact API and avoids a synthetic reopen/start cycle; future PR/report projections must recalculate or become stale atomically |
 | AI context | `store: false`, app-managed bounded context | Better data minimization/control; more token/context engineering and no reliance on provider conversation persistence |
 | AI tool sequencing | Disable parallel calls initially | Easier auditing/rate control; potentially higher coach latency |
 | Analytics | Query-time aggregates plus persisted PR/report snapshots | Avoids warehouse complexity; indexes and bounded ranges are essential as history grows |

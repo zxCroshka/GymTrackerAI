@@ -1,6 +1,6 @@
 # GymTracker AI REST API contract
 
-Status: implemented contract through backend exercise/program stage; later modules remain design
+Status: implemented contract through backend exercise/program stage; workout is the current implementation contract and later modules remain design
 
 Last updated: 2026-08-02
 
@@ -112,10 +112,10 @@ Collection filters are allowlisted per endpoint. Repeating/unknown filters retur
 
 Durable `Idempotency-Key` replay storage is not implemented yet and is therefore not advertised by implemented auth, profile, exercise, or program operations. `POST /programs/{id}/duplicate` is not transport-idempotent: after an ambiguous network failure the client must refetch the list before deciding whether to retry. Program activation is transactional and state-safe, but a retry with the consumed ETag receives `412` and must refetch.
 
+The workout slice does not advertise `Idempotency-Key`: durable replay middleware is not available yet. Creating a workout, exercise, or set after an ambiguous transport failure requires a refetch before retrying. Workout completion is instead state-idempotent under a row lock: the first valid request performs the transition, while any concurrent or later request against that already completed owned workout returns the unchanged current aggregate without repeating derived effects. The initial transition still requires the current root ETag.
+
 When durable replay is introduced for later business slices, it is intended for operations such as:
 
-- create a workout, workout exercise, or set;
-- start, complete, or reopen a workout;
 - create a body measurement or wellness entry;
 - send or retry a coach message;
 - generate or regenerate a weekly report;
@@ -233,44 +233,58 @@ List endpoints may return a summary without nested days. `GET /programs/{id}` re
 
 | Method | Route | Behavior |
 |---|---|---|
-| `GET`, `POST` | `/workouts` | filtered cursor history / create blank or from program day (`Idempotency-Key` required) |
-| `GET`, `PATCH`, `DELETE` | `/workouts/{workout_id}` | aggregate read / metadata edit / delete planned or in-progress; mutations require workout `If-Match` |
-| `POST` | `/workouts/{workout_id}/start` | `planned -> in_progress`; `Idempotency-Key` + `If-Match`; `200` |
-| `POST` | `/workouts/{workout_id}/complete` | `in_progress -> completed`, validate and recalculate records; `Idempotency-Key` + `If-Match`; `200` |
-| `POST` | `/workouts/{workout_id}/cancel` | planned/in-progress to cancelled; `If-Match`; `200` |
-| `POST` | `/workouts/{workout_id}/reopen` | explicit completed correction path; `Idempotency-Key` + `If-Match`; `200` |
-| `GET`, `POST` | `/workouts/{workout_id}/exercises` | list/add; POST requires `Idempotency-Key` and workout `If-Match` |
-| `GET`, `PATCH`, `DELETE` | `/workouts/{workout_id}/exercises/{workout_exercise_id}` | item operations; mutation requires workout `If-Match` |
-| `PUT` | `/workouts/{workout_id}/exercises/order` | full ordered item list; workout `If-Match` |
-| `GET`, `POST` | `/workouts/{workout_id}/exercises/{workout_exercise_id}/sets` | list/add set; POST requires `Idempotency-Key` and workout `If-Match` |
-| `GET`, `PATCH`, `DELETE` | `/workouts/{workout_id}/exercises/{workout_exercise_id}/sets/{set_id}` | set operations; mutation requires workout `If-Match` |
+| `GET`, `POST` | `/workouts` | filtered cursor history summaries / create an `in_progress` or explicit `planned` workout; `201` on create |
+| `GET` | `/workouts/active` | full current `in_progress` aggregate, or `200` with `data: null` when none exists |
+| `GET` | `/workouts/export.csv` | bounded filtered CSV export without a JSON envelope |
+| `GET`, `PATCH`, `DELETE` | `/workouts/{id}` | full aggregate read / strict partial edit / physical deletion of an owned workout in any status; PATCH/DELETE require root workout `If-Match` |
+| `POST` | `/workouts/{id}/complete` | state-idempotent `in_progress -> completed`; root workout `If-Match`; `200` |
+| `POST` | `/workouts/{id}/exercises` | add an exercise; root workout `If-Match`; `201` |
+| `PATCH`, `DELETE` | `/workout-exercises/{id}` | edit/reorder or remove an item; containing workout `If-Match`; `200`/`204` |
+| `GET` | `/workout-exercises/{id}/previous-result` | previous completed occurrence for the same exercise relative to this item; nullable `data`; `200` |
+| `POST` | `/workout-exercises/{id}/sets` | append/insert a performed set; containing workout `If-Match`; `201` |
+| `PATCH`, `DELETE` | `/workout-sets/{id}` | edit/reorder or remove a set; containing workout `If-Match`; `200`/`204` |
 
-Filters: `status`, `from`, `to`, `program_id` (resolved through source day), `exercise_id`, and cursor. `event_at = started_at ?? scheduled_at ?? created_at` is the filtering/default descending ordering/cursor instant, so planned rows have deterministic range semantics.
+List filters are `status`, `from`, `to`, `program_id` (resolved through the source day), `exercise_id`, `limit`, and `cursor`. Unknown or repeated fields return `400 invalid_query`. `event_at = started_at ?? scheduled_at ?? created_at` is the filtering/default descending ordering/cursor instant, so planned rows have deterministic range semantics. List rows are summaries; item and active responses contain the full ordered aggregate.
 
-Create request chooses exactly one source mode:
+Create defaults to `status: in_progress`; `started_at` defaults to the server clock. An explicit `status: planned` requires `started_at` to be absent or null and may include `scheduled_at`. The request chooses exactly one source mode:
 
 ```json
 {
   "program_day_id": "018f4ec2-4c69-7aa6-a820-686d8d132684",
-  "start_immediately": true,
+  "status": "in_progress",
+  "started_at": "2026-08-02T12:00:00Z",
   "scheduled_at": null,
-  "name": null
+  "name": null,
+  "difficulty": null,
+  "energy": null,
+  "mood": null,
+  "comment": null,
+  "has_pain": false,
+  "discomfort": null
 }
 ```
 
-or an ad-hoc `name` with `program_day_id: null`. Program-day creation copies program version, ordered exercise names/prescriptions, and planned target sets. Later program edits cannot modify these rows.
+or a non-empty ad-hoc `name` with `program_day_id: null`. Program-day creation copies the program/day identity, program version, ordered exercise-name and tracking-capability snapshots, rest targets, prescriptions, and planned target sets. Later program or exercise edits cannot modify those snapshots.
 
-PATCH, DELETE, and all child mutations are allowed only for `planned` or `in_progress` workouts. Completed workouts require reopen; cancelled workouts are immutable. Reopen returns a workout to `in_progress`, removes/recalculates affected derived personal records, and marks overlapping current reports stale. It is an explicit auditable correction, not a generic PATCH. Completing with no completed working set returns `422`.
+PATCH permits `planned -> in_progress|cancelled` and `in_progress -> cancelled`; only the completion endpoint can enter `completed`. A completed workout remains completed but its timestamps, scores, comment, pain/discomfort fields, exercises, and sets may be corrected directly with the current ETag. In the current slice dynamic metrics immediately reflect those source-set corrections and the workout version increments once. Once record/report/audit modules are implemented, their narrow ports must join the same transaction to recalculate affected projections, mark old/new periods stale, and append minimized audit metadata. Cancelled workouts are immutable except for explicit deletion. DELETE is explicitly allowed for an owned workout in any status and cascades its children; future rebuildable projections and affected reports must be handled in the same transaction once their modules exist.
 
-Starting or reopening while another workout is `in_progress` returns `409 workout_already_in_progress`; the backend never merges or cancels one implicitly.
+Starting an explicit or default `in_progress` workout, or moving a planned workout to `in_progress`, while another is active returns `409 workout_already_in_progress`; the backend never merges or cancels one implicitly.
 
-### 9.2 Set representation
+Completion accepts an optional JSON object containing `completed_at`, `difficulty`, `energy`, `mood`, `comment`, `has_pain`, and `discomfort`; an absent `completed_at` uses the server clock and explicit `completed_at: null` is invalid. For the other nullable fields, omission preserves metadata already saved on the unfinished workout while explicit null clears it. Empty workouts may be completed. Every call still requires a syntactically valid root `If-Match` naming that workout. For the initial transition its version must be current. Under the workout row lock, an already completed owned workout returns `200` with the unchanged current aggregate and performs no version, record, report, or audit writes; this no-write branch deliberately runs before version comparison and therefore accepts any same-root workout version, including the ETag consumed by the original completion. Missing, malformed, or wrong-root validators still fail, and other stale mutations return `412` normally.
+
+### 9.2 Workout and set fields
+
+`difficulty`, `energy`, and `mood` are nullable integer scores from 1 through 10. `comment` and `discomfort` are nullable bounded text. `has_pain` records the user's answer; omission leaves it null, while explicit true or false records an answer.
+
+Exercise items contain `position`, exercise ID/name and tracking-capability snapshots, read-only nullable `rest_seconds`, optional `comment`, and ordered sets. POST accepts `exercise_id`, optional insertion `position`, and optional `comment`; PATCH accepts only `position` and `comment`. Exercise identity and prescription-rest snapshots are not rewritten in place; correcting the selected exercise uses delete/add. Adding or moving an item shifts sibling positions transactionally. A newly selected exercise must be visible and non-archived; actual set metrics are checked against the snapshotted `tracks_weight`, `tracks_repetitions`, `tracks_time`, and `tracks_distance` capabilities.
+
+Set responses include the server-derived `status`: copied program targets begin as `planned`, a set with actual metrics is `completed`, and untouched planned targets become `skipped` when the workout is completed. Clients do not write `status` directly. Set writes use `set_number`, canonical `weight_kg`, `reps`, `rir`, `warmup`, `failure`, `duration_seconds`, `distance_meters`, nullable `note`, and UTC `performed_at`. `set_number` and `performed_at` default respectively to append position and the server clock. At least one of weight, repetitions, duration, or distance is required for a performed set. Adding actual metrics to a planned set makes it completed; a completed set must retain at least one actual metric after PATCH, so removing its last metric requires deleting the set. At the persistence boundary `warmup: true` maps to internal `set_type = warmup`, `failure: true` maps to `set_type = failure`, and a newly created set with both flags false maps to `set_type = working`; both flags true are rejected. Existing internal non-warmup/non-failure subtypes project both flags as false and are preserved by patches that do not reclassify the set. Unsupported metrics return `422 metric_not_tracked`.
 
 ```json
 {
   "id": "018f4f22-4a62-77a2-8a9f-c19db7b6f841",
-  "position": 1,
-  "set_type": "working",
+  "workout_exercise_id": "018f4f10-3e47-75d9-a1d1-e09557960246",
+  "set_number": 1,
   "status": "completed",
   "target_weight_kg": 100.0,
   "target_reps_min": 5,
@@ -279,10 +293,30 @@ Starting or reopening while another workout is `in_progress` returns `409 workou
   "weight_kg": 100.0,
   "reps": 7,
   "rir": 1.5,
-  "completed_at": "2026-08-02T13:14:52Z",
-  "notes": null
+  "warmup": false,
+  "failure": false,
+  "duration_seconds": null,
+  "distance_meters": null,
+  "note": null,
+  "performed_at": "2026-08-02T13:14:52Z",
+  "volume_kg": 700.0,
+  "estimated_1rm_kg": 123.333
 }
 ```
+
+Volume is `weight_kg * reps` only for performed non-warmup sets. Estimated 1RM uses Epley, `weight_kg * (1 + reps / 30)`, only for a non-warmup set with positive weight and 1 through 15 repetitions. Sets above 15 repetitions remain valid but return `estimated_1rm_kg: null`.
+
+### 9.3 Previous result and CSV
+
+`GET /workout-exercises/{id}/previous-result` anchors both ownership and the historical cutoff in the current item. It finds the latest earlier completed workout containing the same exercise, ordered deterministically by workout event instant and ID, and returns its IDs/timestamps plus performed sets in ascending set-number order. No earlier result is a successful `200` with `data: null`; only a missing or foreign anchor returns `404`.
+
+CSV accepts the list filters except `limit` and `cursor`, is ordered chronologically by workout event instant/ID, exercise position, and set number, and emits one row per set. Exercise/workout rows without sets remain present with empty set columns. The stable header is:
+
+```csv
+workout_id,workout_name,status,source_program_id,source_program_day_id,event_at,scheduled_at,started_at,completed_at,cancelled_at,difficulty,energy,mood,comment,has_pain,discomfort,workout_volume_kg,exercise_position,workout_exercise_id,exercise_id,exercise_name,set_number,set_status,weight_kg,reps,rir,warmup,failure,duration_seconds,distance_meters,note,performed_at,set_volume_kg,estimated_1rm_kg
+```
+
+The response is `text/csv; charset=utf-8` with `Content-Disposition: attachment`, `Cache-Control: no-store`, and `X-Request-ID`, but no JSON envelope. Values use canonical units, RFC 3339 UTC, dot decimals, lowercase booleans, and empty cells for null. Fields follow RFC 4180 quoting/CRLF rules. A user-controlled text cell whose first non-space character is `=`, `+`, `-`, or `@` is prefixed with an apostrophe before CSV quoting to prevent spreadsheet formula execution. Export is capped at 100,000 data rows; a larger match fails before CSV output with `422 export_too_large`, and the client must narrow its filters. Invalid queries and other pre-stream failures still return the standard problem JSON.
 
 ## 10. Measurement module
 
@@ -341,7 +375,7 @@ The backend derives `[period_start_at, period_end_at)` from the user's current I
 
 First generation has no prior artifact, so its pending row is current. During regeneration, the prior artifact remains current while the replacement pending revision is returned directly and shown as replacement work. Only when replacement reaches `ready` does one transaction switch `is_current`; a failed replacement cannot hide the previous usable report.
 
-The runner captures `input_data_through_at` and all deterministic aggregates in one short `REPEATABLE READ` database transaction, then commits the metric snapshot. Optional narrative insight runs afterward and receives only a specialized safe backend-context projection of the stored deterministic metrics, never live/raw training rows. Any later workout completion/reopen/correction or body/wellness create/update/delete affecting the interval marks the current ready report `stale`.
+The runner captures `input_data_through_at` and all deterministic aggregates in one short `REPEATABLE READ` database transaction, then commits the metric snapshot. Optional narrative insight runs afterward and receives only a specialized safe backend-context projection of the stored deterministic metrics, never live/raw training rows. Any later workout completion/direct correction/deletion or body/wellness create/update/delete affecting the interval marks the current ready report `stale`.
 
 Report fields include UTC period bounds, zone, revision/current flag, generation status, deterministic `metrics` with schema version and input cutoff, attempt/retry metadata (`retryable`, optional `next_attempt_at`), AI insight/status, model/prompt version, error code, generated instant, and links to relevant progress/history filters. Metrics may be ready even when `ai_insight_status = "failed"`.
 
@@ -436,7 +470,7 @@ Any confirm of an already `applied` recommendation by the same owner with the sa
 |---|---|
 | User | `active -> disabled|deleted`; controlled restore policy only |
 | Program | `draft|inactive -> active`; `active -> inactive`; non-archived -> `archived` |
-| Workout | `planned -> in_progress|cancelled`; `in_progress -> completed|cancelled`; `completed -> in_progress` only via reopen |
+| Workout | create as `planned|in_progress`; `planned -> in_progress|cancelled`; `in_progress -> completed` through complete or `cancelled` through PATCH; `completed` remains directly correctable; cancelled tree is immutable; any status may be deleted |
 | Assistant message | `pending -> processing -> completed|failed`; `failed -> pending` explicit retry; fenced `processing -> pending` lease recovery; pending/processing -> `cancelled` on archive/AI disable/account disable-delete |
 | Recommendation | `proposed -> applied|rejected|expired|superseded` |
 | Weekly report revision | `pending -> generating -> ready|failed`; fenced `generating -> pending` transient retry/lease recovery; `ready -> stale` after any affecting source mutation |
@@ -449,7 +483,10 @@ Invalid transitions return `409`; invalid field values return `422`.
 | Situation | Status/code |
 |---|---|
 | Active replacement ID absent/wrong | `409 active_program_replacement_required` / `active_program_changed` |
-| Workout start/reopen while another is active | `409 workout_already_in_progress` |
+| Workout create/start while another is active | `409 workout_already_in_progress` |
+| Workout transition or cancelled-tree mutation is disallowed | `409 invalid_workout_state` |
+| Set supplies a metric not tracked by its exercise snapshot | `422 metric_not_tracked` |
+| CSV selection exceeds 100,000 data rows | `422 export_too_large` |
 | Duplicate body measurement instant | `409 measurement_already_exists` |
 | Duplicate calculated wellness civil day | `409 wellness_already_exists` |
 | Archived conversation message/retry | `409 conversation_archived` |

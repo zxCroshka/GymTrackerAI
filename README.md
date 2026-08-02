@@ -1,6 +1,6 @@
 # GymTracker AI
 
-GymTracker AI is a planned web application for building strength-training programs, recording workouts and body measurements, visualizing progress, generating weekly reports, and consulting an AI coach grounded in the authenticated user's own training data.
+GymTracker AI is a web application under active development for building strength-training programs, recording workouts and body measurements, visualizing progress, generating weekly reports, and consulting an AI coach grounded in the authenticated user's own training data.
 
 The AI coach is designed around a strict safety boundary: apart from the text explicitly submitted in the owned coach conversation, OpenAI receives user-specific facts only as minimized results from allowlisted Go backend tools. The model cannot directly edit a training program. It can create a validated proposal, show the user a clear diff and rationale, and the backend applies it only after explicit confirmation.
 
@@ -8,7 +8,7 @@ The AI coach is designed around a strict safety boundary: apart from the text ex
 
 - Create, activate, and archive multi-day training programs.
 - Track exercises, sets, weight, repetitions, and RIR during a workout.
-- Browse snapshot-based workout history, changeable only through an explicit reopen/correction flow, and personal records.
+- Browse snapshot-based workout history and make explicit, owner-authorized corrections to completed workouts without reopening them.
 - Record body mass, body measurements, and daily wellness.
 - Visualize training volume, exercise performance, and body trends.
 - Produce deterministic weekly metrics with optional AI-written insights.
@@ -46,11 +46,13 @@ The monorepo now contains a working technical foundation:
 - an idempotent seed command with 19 deterministic reviewed system exercises and a concrete pgx transaction helper;
 - authenticated exercise catalogue routes for system/owned exercises, literal search, controlled filters, capability filters, cursor pagination, custom creation/update, and history-safe archive;
 - authenticated full-aggregate program routes for create/read/update/archive, duplication, and transactional activation with one active program per user;
+- authenticated owner-scoped workout routes for starting an ad-hoc workout or one snapshotted from an active program day, retrieving the single active workout, history/detail reads, metadata updates, nested exercise/set CRUD, previous exercise results, state-idempotent completion, CSV export, and explicit hard deletion with cascading children;
+- direct completed-workout corrections guarded by ownership, the workout ETag, and one transaction while retaining completed status and a valid non-null completion instant; workout volume and Epley estimated 1RM for sets of at most 15 repetitions are currently calculated dynamically from source sets rather than stored as progress projections;
 - `GET /health/live` and `GET /health/ready` operational endpoints;
 - a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
 - reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
 
-Workout, progress, report, and AI Coach use cases remain intentionally unimplemented. The only measurement write currently exposed is the initial measurement created transactionally by authenticated profile import. No exercise/program frontend screens were added in this backend stage.
+Workout frontend screens, progress/personal-record projections, weekly reports, and AI Coach use cases remain intentionally unimplemented. The only measurement write currently exposed is the initial measurement created transactionally by authenticated profile import. No exercise, program, or workout frontend screens were added in this backend stage. When progress and report modules are implemented, completed-workout correction and deletion transactions will also recalculate their projections and invalidate affected reports through narrow module ports; the current backend does not claim those future side effects.
 
 ## Local development
 
@@ -90,7 +92,7 @@ curl http://localhost:8080/health/live
 curl http://localhost:8080/health/ready
 ```
 
-Implemented API route groups are auth (`register`, `login`, `refresh`, `logout`), own profile (`GET`, `PATCH`, `import`), exercises (`GET/POST /api/v1/exercises`, `GET/PATCH/DELETE /api/v1/exercises/{id}`), and programs (`GET/POST /api/v1/programs`, `GET/PATCH/DELETE /api/v1/programs/{id}`, `duplicate`, `activate`). Exact schemas, filters, cookie behavior, archive rules, and ETag preconditions are in `docs/openapi.yaml`.
+Implemented API route groups are auth (`register`, `login`, `refresh`, `logout`), own profile (`GET`, `PATCH`, `import`), exercises (`GET/POST /api/v1/exercises`, `GET/PATCH/DELETE /api/v1/exercises/{id}`), programs (`GET/POST /api/v1/programs`, `GET/PATCH/DELETE /api/v1/programs/{id}`, `duplicate`, `activate`), and owner-scoped workouts with active/history/detail/export, completion, nested exercise/set, and previous-result operations. Exact schemas, filters, cookie behavior, archive rules, and ETag preconditions are in `docs/openapi.yaml`.
 
 Registration returns an access token in JSON and sets the raw refresh token only as an HttpOnly cookie:
 
@@ -107,7 +109,7 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 - `make backend-run` — run the API locally.
 - `make backend-test` — run Go tests.
-- `make backend-integration-test` — run migration, auth/user, exercise/program integration tests against the dedicated disposable PostgreSQL database in `TEST_DATABASE_URL`; tests perform full up/down.
+- `make backend-integration-test` — run migration, auth/user, exercise/program/workout integration tests against the dedicated disposable PostgreSQL database in `TEST_DATABASE_URL`; tests perform full up/down.
 - `make backend-fmt` — format Go files.
 - `make frontend-dev` — run the Next.js development server.
 - `make frontend-test` — run frontend unit tests.
@@ -121,6 +123,6 @@ Refresh/logout requests must include an origin from `AUTH_ALLOWED_ORIGINS`. Prod
 
 Schema migration is never performed by API startup. The Compose `backend` service depends on successful completion of the one-shot `migrate` service, so multiple API replicas cannot race to migrate the database.
 
-PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs migration, auth/user, and exercise/program repository/HTTP scenarios with PostgreSQL 16.
+PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs migration, auth/user, exercise/program, and workout repository/HTTP scenarios with PostgreSQL 16.
 
 Docker and the Compose plugin are installed in the current development environment, but daemon availability can vary by session. Try Docker-backed integration checks when relevant; never use `sudo` or alter host permissions. If daemon access actually fails, `docker compose --env-file .env.example config --quiet` still validates Compose statically and the blocked container checks must be reported explicitly.

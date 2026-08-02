@@ -32,7 +32,7 @@ Threats include unauthenticated attackers, a malicious authenticated user attemp
 5. The model has no arbitrary SQL, HTTP, MCP, filesystem, shell, secret, or core-data write tool.
 6. A model-generated proposal cannot mutate a program. Only the authenticated recommendation confirmation route can apply it after full revalidation/version checks.
 7. External OpenAI calls are not made inside database transactions.
-8. Completed workout facts cannot be edited without the explicit reopen/correction workflow and downstream recalculation/staleness handling.
+8. Completed workout facts change only through authenticated, owner-scoped, ETag-protected correction routes. Corrections retain completed status, are transactional, and require downstream recalculation/staleness handling when those projections exist.
 
 A change that violates or weakens one of these invariants requires explicit documented approval and corresponding threat/test updates.
 
@@ -181,7 +181,7 @@ Runtime logs are structured JSON and use a central redaction policy. Never log:
 
 Log safe request/route/status/duration/error data. AI operational fields may include pseudonymous user ID, conversation/message IDs, tool name, audit-key HMAC argument/result digest, row count/range, provider request ID, model, prompt/schema version, token counts, latency, and outcome. Do not treat raw SHA-256 as concealment for low-entropy measurements. Apply access controls and retention to logs.
 
-Immutable business audit covers refresh reuse/revocation, auth-version changes, account deletion, workout reopen, program activation, coach tool denial, recommendation creation/confirm/reject/stale outcome, and report regeneration. Metadata is minimized and never duplicates raw sensitive content.
+Immutable business audit covers refresh reuse/revocation, auth-version changes, account deletion, completed-workout correction/deletion once audit integration exists, program activation, coach tool denial, recommendation creation/confirm/reject/stale outcome, and report regeneration. Metadata is minimized and never duplicates raw sensitive content.
 
 ## 11. Privacy and OpenAI data controls
 
@@ -224,7 +224,7 @@ Required automated tests include:
 - global versus custom exercise visibility/write rules;
 - SQL/filter/cursor/body/unknown-field/range fuzz and negative tests;
 - ETag lost-update and idempotency replay/body-mismatch/concurrency tests;
-- workout lifecycle, immutable completion, reopen PR recalculation/report staleness;
+- workout lifecycle, state-idempotent completion, and completed-correction/deletion PR recalculation/report staleness;
 - strict tool schema and separate domain validation failures;
 - prompt-injection attempts and forbidden tool names/owner arguments/range escalation;
 - proof that the OpenAI loop has no program write/apply/confirm path;

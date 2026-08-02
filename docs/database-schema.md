@@ -17,7 +17,7 @@ Last updated: 2026-08-02
 - Every foreign-key column has a supporting index unless it is already the leading part of a unique/primary index.
 - JSONB is limited to versioned document snapshots: typed coach proposals, minimized tool audit summaries, report metrics, and idempotent response replay. Core training data remains relational.
 
-The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds typed profile/import fields and normalized notes. `000003_add_exercise_capabilities` adds the controlled exercise type, equipment/muscle allowlists, tracking capabilities, and catalogue filter index. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
+The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds typed profile/import fields and normalized notes. `000003_add_exercise_capabilities` adds the controlled exercise type, equipment/muscle allowlists, tracking capabilities, and catalogue filter index. `000004_extend_workout_tracking` adds workout feedback, immutable exercise-capability snapshots, duration/distance set metrics, and event-order indexes without rewriting existing workout facts. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
 
 ## 2. Tenant isolation pattern
 
@@ -240,11 +240,16 @@ Constraints/indexes: `UNIQUE (id, user_id)`; partial `UNIQUE (program_day_id, po
 | `completed_at` | `timestamptz` | yes | required only for completed; not before start |
 | `cancelled_at` | `timestamptz` | yes | required only for cancelled |
 | `notes` | `text` | yes | bounded |
+| `difficulty` | `smallint` | yes | workout feedback, `1..10`; null means not recorded |
+| `energy` | `smallint` | yes | workout feedback, `1..10`; null means not recorded |
+| `mood` | `smallint` | yes | workout feedback, `1..10`; null means not recorded |
+| `has_pain` | `boolean` | yes | null means the question was not recorded for legacy history |
+| `discomfort` | `text` | yes | trimmed, `1..4000` characters when present |
 | `version` | `bigint` | no | default 1, `> 0`; aggregate ETag |
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Constraints/indexes: `UNIQUE (id, user_id)`; status/timestamp consistency checks; partial `UNIQUE (user_id) WHERE status = 'in_progress'`; `(user_id, started_at DESC, id DESC)`; `(user_id, status, scheduled_at)`; `(source_program_day_id, user_id)`. A second start returns `409 workout_already_in_progress`.
+Constraints/indexes: `UNIQUE (id, user_id)`; status/timestamp consistency checks; partial `UNIQUE (user_id) WHERE status = 'in_progress'`; `(user_id, started_at DESC, id DESC)`; `(user_id, status, scheduled_at)`; `(source_program_day_id, user_id)`; event cursors `(user_id, COALESCE(started_at, scheduled_at, created_at) DESC, id DESC)` and `(user_id, status, COALESCE(started_at, scheduled_at, created_at) DESC, id DESC)`; partial completed lookup `(user_id, completed_at DESC, id DESC) WHERE status = 'completed'`. A second start returns `409 workout_already_in_progress`.
 
 ### 6.2 `workout_exercises` (`workout` module)
 
@@ -257,11 +262,18 @@ Constraints/indexes: `UNIQUE (id, user_id)`; status/timestamp consistency checks
 | `source_program_day_exercise_id` | `uuid` | yes | composite FK with user, `NO ACTION` |
 | `position` | `smallint` | no | `> 0` |
 | `exercise_name_snapshot` | `text` | no | immutable historical name |
+| `rest_seconds` | `integer` | yes | prescription snapshot, `0..86400`; null for ad-hoc/no-rest-target history |
+| `tracks_weight` | `boolean` | no | immutable exercise-capability snapshot |
+| `tracks_repetitions` | `boolean` | no | immutable exercise-capability snapshot |
+| `tracks_time` | `boolean` | no | immutable duration-capability snapshot |
+| `tracks_distance` | `boolean` | no | immutable distance-capability snapshot |
 | `notes` | `text` | yes | bounded |
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_id, position)`; `(workout_id, user_id)`; `(exercise_id)`; `(source_program_day_exercise_id, user_id)`; `(user_id, exercise_id)`; `(workout_id, position)`.
+Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_id, position)`; at least one tracking capability is true; rest range check; `(workout_id, user_id)`; `(exercise_id)`; `(source_program_day_exercise_id, user_id)`; `(user_id, exercise_id)`; `(workout_id, position)`.
+
+The service copies tracking capabilities from the visible exercise and `rest_seconds` from the selected prescription when it creates the workout item. These values, like the exercise name, are never refreshed after exercise/program edits and are the authority for validating that set metrics are applicable. Migration `000004` backfills pre-existing rows from the referenced current exercise and, where available, the referenced prescription; this is the best recoverable snapshot for history created before capabilities were persisted on workout items.
 
 ### 6.3 `workout_sets` (`workout` module)
 
@@ -277,17 +289,21 @@ Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_id, position)`; `(
 | `target_reps_min` | `smallint` | yes | `>= 0` |
 | `target_reps_max` | `smallint` | yes | max not below min |
 | `target_rir` | `numeric(3,1)` | yes | `0..10` |
-| `weight_kg` | `numeric(8,3)` | yes | actual, `>= 0`; required when completed |
-| `reps` | `smallint` | yes | actual, `>= 0`; required when completed |
+| `weight_kg` | `numeric(8,3)` | yes | actual, `>= 0` when present |
+| `reps` | `smallint` | yes | actual, `>= 0` when present |
 | `rir` | `numeric(3,1)` | yes | actual, `0..10` |
+| `duration_seconds` | `integer` | yes | actual duration, `0..86400` |
+| `distance_meters` | `numeric(12,3)` | yes | actual distance in metres, `>= 0` |
 | `completed_at` | `timestamptz` | yes | required when completed |
 | `notes` | `text` | yes | bounded |
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC |
 
-Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_exercise_id, position)`; completed/planned/skipped consistency checks; `(user_id, completed_at DESC)`; `(workout_exercise_id, user_id)`; `(workout_exercise_id, position)`.
+Constraints/indexes: `UNIQUE (id, user_id)`; `UNIQUE (workout_exercise_id, position)`; a completed set has `completed_at` and at least one non-null value among weight, repetitions, duration, and distance; planned/skipped sets have no actual metric, RIR, or completion instant; `(user_id, completed_at DESC)`; `(workout_exercise_id, user_id)`; `(workout_exercise_id, position)`.
 
-Planned target rows are copied into the workout. Subsequent program changes therefore cannot alter a workout already instantiated. Completed aggregates are immutable until an explicit reopen transition; reopen causes affected records/reports to be recalculated or marked stale.
+At the API boundary `position` is represented as `set_number`, `completed_at` as `performed_at`, and `notes` as `note`. API flags map to the existing normalized category: `warmup` means `set_type = 'warmup'`, `failure` means `set_type = 'failure'`; they are not duplicated as stored boolean columns and cannot both be true.
+
+Planned target rows are copied into the workout. Subsequent program changes therefore cannot alter a workout already instantiated. An explicit user correction may edit a completed aggregate under its root version lock; dynamic metrics immediately derive from the corrected rows. Once progress/report modules are implemented, their recalculation/staleness ports must join this same transaction. Program or exercise metadata changes never rewrite the snapshot.
 
 ## 7. Measurement and progress tables
 
@@ -547,8 +563,8 @@ Indexes: `(actor_user_id, occurred_at DESC)`, `(resource_type, resource_id, occu
 - Normal account deletion sets `users.status = 'deleted'`, records `deleted_at`, revokes sessions, and makes authentication fail. A controlled purge later physically deletes user rows and cascades private data according to policy.
 - Draft programs with no references may be purged; referenced programs/days/prescriptions are archived so workout provenance remains valid.
 - Custom exercises are archived while referenced. System exercises are operational catalogue data and are not user-deletable.
-- In-progress/planned workouts may be deleted through the documented API. Completed/cancelled workouts require explicit reopen/correction or account purge, not generic deletion.
-- Workout children cascade with a purged workout; derived personal records cascade with their source set and are recalculated on correction.
+- An owned workout is deleted only through the explicit version-checked operation. Deleting completed data first identifies the affected interval, then atomically marks current reports stale; workout children and derived personal records cascade with the deleted root.
+- Direct completed-workout corrections use the same root lock and version check as other aggregate edits, recalculate derived personal records, and stale affected reports in the same transaction.
 - Conversations are normally archived. Account purge cascades messages, tool audit, and recommendations.
 - Weekly report revisions are immutable and removed with the account under the retention policy.
 - Expired idempotency rows are purged automatically. Security audit retention is policy-driven and may be pseudonymized when the account is purged.
@@ -585,8 +601,10 @@ The application must enforce these rules in a transaction with locks where neede
 - at most one active program is switched without an intermediate invalid state;
 - nested program/workout changes increment the root version exactly once per request;
 - source program version is copied consistently when a workout is instantiated;
-- completed/cancelled workout rows cannot be mutated without reopen;
-- personal records are recalculated from completed working sets after completion/reopen;
+- completed workout corrections are explicit, version-checked aggregate commands; dynamic metrics derive immediately from the corrected sets, and future personal-record/report ports must recalculate or stale projections atomically once implemented;
+- cancelled workout facts remain immutable except for explicit owner-authorized deletion;
+- personal records are recalculated from completed working sets after completion or a completed-data correction;
+- performed set fields are accepted only when enabled by the owning `workout_exercises` capability snapshot; duration and distance never rely on subsequently edited exercise metadata;
 - daily boundary and weekly boundaries match the stored IANA zone, including DST;
 - only the current weekly report revision has `is_current = true`;
 - report generation reads metrics/cutoff from one short `REPEATABLE READ` snapshot; every later source mutation affecting its interval marks the current ready artifact stale;
@@ -600,8 +618,9 @@ The application must enforce these rules in a transaction with locks where neede
 - `user_profiles`: AI enabled requires non-null current notice version and `ai_enabled_at`; disabled permits/records `ai_disabled_at`. Version and text limits remain positive/bounded.
 - `refresh_tokens`: `token_hash` is exactly 32 bytes; expiry is after creation; replacement cannot be itself and uses the same family/owner; revoked rows have a reason code.
 - `programs`: archived status iff `archived_at` is set; active requires `activated_at`; inactive requires `inactivated_at`; names are non-empty.
-- `workouts`: in-progress/completed require `started_at`; completed iff it has `completed_at`; cancelled iff it has `cancelled_at`; completion is not before start; terminal statuses have no active timestamps inconsistent with the state.
-- `workout_sets`: target/actual weights and reps are non-negative, rep maximum is not below minimum, RIR is `0..10`; completed requires actual weight/reps/`completed_at`; planned/skipped have no `completed_at`.
+- `workouts`: in-progress/completed require `started_at`; completed iff it has `completed_at`; cancelled iff it has `cancelled_at`; completion is not before start; terminal statuses have no active timestamps inconsistent with the state; difficulty/energy/mood are null or `1..10`, and discomfort is null or trimmed bounded text.
+- `workout_exercises`: rest is null or `0..86400`; all capability snapshots are non-null and at least one is true.
+- `workout_sets`: target/actual weights and reps, duration, and distance are non-negative, rep maximum is not below minimum, RIR is `0..10`; completed requires `completed_at` plus at least one actual weight/repetition/duration/distance metric; planned/skipped have no actual metrics or `completed_at`.
 - `body_measurements`: `source DEFAULT 'manual' CHECK IN ('manual','import')`; at least one numeric measurement; body-fat `0..100`; other numeric values are positive and API-human-range checked.
 - `daily_wellness`: at least one score/value or non-empty notes; sleep/score/heart-rate ranges are those listed in the table.
 - `personal_records`: non-negative value; `formula` is required iff type is `estimated_1rm`.
@@ -618,7 +637,7 @@ Canonical text limits are synchronized in OpenAPI/backend and duplicated as data
 
 - The training model is normalized into program/workout roots, ordered exercises, and sets. Repeated arrays are not stored in JSONB.
 - Repeated `user_id` on private children is deliberate database-level tenant protection.
-- `exercise_name_snapshot`, workout target fields, and `source_program_version` are deliberate immutable history snapshots.
+- `exercise_name_snapshot`, workout capability/rest snapshots, workout target fields, and `source_program_version` are deliberate immutable history snapshots.
 - Wide body-measurement columns are atomic properties of one event. This is preferred over EAV for validation, type safety, and chart queries; adding a supported measurement requires a migration.
 - Personal records are a rebuildable projection for auditable discovery/query speed.
 - Weekly metrics and AI proposals are versioned documents whose exact historical shape matters, so typed JSONB is appropriate with schema-versioned backend validation.
@@ -629,5 +648,6 @@ Canonical text limits are synchronized in OpenAPI/backend and duplicated as data
 - The API never auto-migrates. Compose runs a single one-shot `migrate` service after PostgreSQL becomes healthy, and backend startup waits for its successful completion.
 - PostgreSQL integration tests apply the schema to an empty disposable database, test UTC sessions, transaction commit/rollback, cross-user isolation, idempotent seed behavior, exercise/program lifecycle and history retention, then execute the full rollback.
 - `make migrate-down` rolls back one migration and must never target a non-disposable database unintentionally.
+- The `000004` upgrade adds populated-table checks as `NOT VALID` and validates them explicitly. Its rollback first proves that capability/rest snapshots still match their referenced exercise/prescription, then installs and validates `NOT VALID` checks for the preceding workout/set representation before dropping an index, constraint, or column. It never rewrites a completed set into another status. Rollback stops if snapshots have diverged, workout feedback or duration/distance data exists, or a completed set shape cannot be represented by `000003`; production rollback after new feature data exists therefore requires an explicit export/restore or forward fix rather than silent data loss.
 - Before later migrations add indexes or constraints to populated tables, assess lock duration and provide an upgrade test from the preceding version.
 - pgx v5.7.2 and golang-migrate v4.18.2 are pinned because their declared minimum Go versions remain compatible with Go 1.22.2.

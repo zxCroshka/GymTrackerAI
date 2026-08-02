@@ -73,13 +73,14 @@ An authenticated adult strength-training user who follows a repeatable program, 
 
 - **WORKOUT-01:** A user can start a blank workout or instantiate one from an accessible program day.
 - **WORKOUT-02:** Starting from a program copies the relevant prescription and exercise name into the workout snapshot.
-- **WORKOUT-03:** A workout contains ordered exercises and ordered sets. A completed set records set type, weight, repetitions, optional RIR, completion time, and optional notes.
+- **WORKOUT-03:** A workout contains ordered exercises and ordered sets. A completed set records set type, at least one metric supported by the exercise (weight, repetitions, duration, or distance), optional RIR, completion time, and optional notes.
 - **WORKOUT-04:** Weight is stored canonically in kilograms and RIR is constrained to `0.0` through `10.0`.
 - **WORKOUT-05:** A workout moves through explicit states: `planned`, `in_progress`, and then `completed` or `cancelled`. Invalid state transitions are rejected.
-- **WORKOUT-06:** Completing a workout validates completed-set data, sets a completion instant, and updates derived personal records in one consistent operation.
+- **WORKOUT-06:** Completing a workout validates completed-set data and sets a completion instant in one transaction. When the progress projection is implemented, personal-record updates join that same operation through its narrow module port.
 - **WORKOUT-07:** A user can browse and filter their workout history by time range, status, program, and exercise.
 - **WORKOUT-08:** Completed history remains readable if a source program or custom exercise is later archived.
 - **WORKOUT-09:** A user can have at most one `in_progress` workout; a second start returns a visible conflict rather than silently abandoning or merging sessions.
+- **WORKOUT-10:** A user can explicitly correct or delete an owned completed workout. Correction routes preserve completed status and require completion time to remain non-null and valid even when that instant is corrected, use optimistic concurrency, and trigger derived-data recalculation/staleness once those projections are implemented.
 
 ### 6.5 Body measurements and wellness
 
@@ -103,7 +104,7 @@ An authenticated adult strength-training user who follows a repeatable program, 
 - **REPORT-03:** The system prevents duplicate reports for the same user and period and supports idempotent generation/retry.
 - **REPORT-04:** AI-written insight is optional and is based only on the stored deterministic metrics. If OpenAI is unavailable, deterministic report data remains usable and the AI insight failure is visible.
 - **REPORT-05:** A report stores an immutable input cutoff and metric snapshot so later corrections do not silently rewrite what was originally reported. Explicit regeneration creates a new report revision and retains the prior artifact.
-- **REPORT-06:** Any source mutation affecting a generated period—including a newly completed/backdated workout, reopen/correction, or body/wellness create/update/delete—marks the current ready report stale. Metrics are read from one consistent database snapshot before optional AI insight.
+- **REPORT-06:** Any source mutation affecting a generated period—including a newly completed/backdated workout, direct correction/deletion, or body/wellness create/update/delete—marks the current ready report stale. Metrics are read from one consistent database snapshot before optional AI insight.
 
 ### 6.8 AI coach conversations
 
