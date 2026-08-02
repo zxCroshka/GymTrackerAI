@@ -34,8 +34,50 @@ Local and CI infrastructure will use Docker, `docker compose`, a Makefile, GitHu
 
 Repository-wide Codex rules are defined in [AGENTS.md](AGENTS.md).
 
-## Current status
+## Implemented foundation
 
-The repository is in the design phase. It contains architecture and product documentation only; backend source code, frontend source code, dependencies, database migrations, Docker files, Makefile, workflows, and environment templates have not been created yet.
+The monorepo now contains a working technical foundation:
 
-Docker and the Compose plugin are installed in the current development environment, but the current user cannot access the Docker daemon. Do not attempt to change host permissions with `sudo`; integration tests that need containers must be run after daemon access is provided by the environment owner.
+- a Go 1.22.2-compatible API using chi, environment configuration, structured JSON logging, request IDs, panic recovery, request logging, graceful shutdown, and unified problem responses;
+- `GET /health/live` and `GET /health/ready` operational endpoints;
+- a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
+- reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
+
+Authorization, database access/migrations, exercises, programs, workouts, reports, progress features, and AI Coach are intentionally not implemented yet. The PostgreSQL Compose service is prepared, but backend readiness currently reflects only application state.
+
+## Local development
+
+Requirements: Go 1.22.2, Node.js 22, npm 10, Docker with the Compose plugin for container-based startup.
+
+Create an untracked local environment file before using Compose:
+
+```bash
+cp .env.example .env
+```
+
+Run backend and frontend in separate terminals:
+
+```bash
+make backend-run
+make frontend-dev
+```
+
+The frontend is available at `http://localhost:3000`; the backend listens at `http://localhost:8080`. Health checks:
+
+```bash
+curl http://localhost:8080/health/live
+curl http://localhost:8080/health/ready
+```
+
+## Make commands
+
+- `make backend-run` — run the API locally.
+- `make backend-test` — run Go tests.
+- `make backend-fmt` — format Go files.
+- `make frontend-dev` — run the Next.js development server.
+- `make frontend-test` — run frontend unit tests.
+- `make frontend-build` — create a production frontend build.
+- `make compose-up` — build and start PostgreSQL, backend, and frontend.
+- `make compose-down` — stop the Compose stack without deleting its database volume.
+
+Docker and the Compose plugin are installed in the current development environment, but the current user may not be able to access the Docker daemon. Do not use `sudo` or alter host permissions; `docker compose --env-file .env.example config --quiet` can still validate the Compose file statically.

@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Go
+backend/bin/
+backend/coverage/
+backend/coverage.out
+
+# Next.js and npm
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+frontend/npm-debug.log*
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local logs and temporary files
+*.log
+.cache/
+tmp/

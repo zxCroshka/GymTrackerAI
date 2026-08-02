@@ -28,10 +28,10 @@ flowchart LR
 
 ## 3. Deployment shape
 
-The intended Compose topology is:
+The implemented Compose topology is:
 
-- `web`: Next.js application;
-- `api`: Go application containing all nine business modules and a lightweight internal pending-work runner;
+- `frontend`: Next.js application;
+- `backend`: Go application that will contain all nine business modules and a lightweight internal pending-work runner;
 - `postgres`: PostgreSQL with a persistent named volume.
 
 This remains a modular monolith. The pending-work runner is part of the same codebase/process and calls the same application services; it is not a separate service boundary. Multiple `api` replicas may be introduced later only if PostgreSQL row locking/advisory locking prevents duplicate work.

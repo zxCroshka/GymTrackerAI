@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: sequenced future work; design/documentation phase only
+Status: first executable foundation slice implemented; later slices sequenced
 
 Last updated: 2026-08-02
 
@@ -16,9 +16,9 @@ The modular-monolith boundaries in `architecture.md`, schema in `database-schema
 - Frontend uses installed Node.js 22, npm 10, and an npm lockfile. Do not use pnpm, Yarn, or Bun.
 - Use `docker compose`, not `docker-compose`.
 - Docker CLI/Compose are installed, but the current user cannot reach the Docker daemon. Do not use `sudo` or modify host permissions. PostgreSQL/container integration checks remain an explicitly reported environment blocker until access is supplied.
-- Do not install dependencies or create source/migrations as part of the present documentation task.
+- Foundation dependencies are now locked in `backend/go.sum` and `frontend/package-lock.json`. Subject-area migrations remain out of scope until their vertical slices.
 
-## 3. Phase 0 — design baseline (this task)
+## 3. Phase 0 — design baseline (completed)
 
 Deliverables:
 
@@ -29,16 +29,16 @@ Deliverables:
 - AI tool/approval flow and threat controls;
 - implementation sequence and repository rules.
 
-Exit gate:
+Historical exit gate at completion of Phase 0:
 
 - all required documents exist;
 - module/table/route/state/time/unit names agree;
 - design explicitly states unresolved product choices;
-- repository still has no backend/frontend source, dependency manifests, migrations, or infrastructure implementation.
+- repository still had no backend/frontend source, dependency manifests, migrations, or infrastructure implementation.
 
 ## 4. Phase 1 — executable foundation and contracts
 
-Implement only after a separate user request.
+Implementation was authorized by the subsequent foundation request. The first slice now provides the Go/chi server and middleware, app-only health checks, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, and CI. Database/pgx readiness, the initial OpenAPI document, API client/auth shells, and migrations remain explicit later work within this phase or the next owning vertical slice; they are not represented by placeholders.
 
 Deliverables:
 
