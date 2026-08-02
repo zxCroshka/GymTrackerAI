@@ -1,6 +1,6 @@
 # GymTracker AI PostgreSQL schema
 
-Status: logical schema baseline; no migrations have been created
+Status: implemented persistence foundation
 
 Last updated: 2026-08-02
 
@@ -17,7 +17,7 @@ Last updated: 2026-08-02
 - Every foreign-key column has a supporting index unless it is already the leading part of a unique/primary index.
 - JSONB is limited to versioned document snapshots: typed coach proposals, minimized tool audit summaries, report metrics, and idempotent response replay. Core training data remains relational.
 
-Example defaults below describe intent, not a migration. Exact constraint/index names will be explicit in future migration files.
+The executable definition is `backend/migrations/000001_create_gymtracker_schema.up.sql`; its paired `.down.sql` file is the complete rollback. Constraint and index names are explicit there. Future changes must use new numbered migrations rather than editing an already shared migration.
 
 ## 2. Tenant isolation pattern
 
@@ -149,6 +149,8 @@ Partial expression indexes enforce case-insensitive uniqueness separately:
 - `UNIQUE (owner_user_id, lower(name)) WHERE owner_user_id IS NOT NULL AND archived_at IS NULL`.
 
 Additional indexes: `(owner_user_id, archived_at)`, searchable normalized name. Program/workout FKs use `ON DELETE NO ACTION`; referenced exercises are archived, not hard-deleted during normal use.
+
+System catalogue data is installed separately from schema migration by the idempotent `cmd/dbseed` mechanism. The foundation includes only three deterministic baseline exercises with stable UUIDs; expansion requires reviewed seed data and does not require a schema migration.
 
 ### 5.2 `programs` (`program` module)
 
@@ -604,14 +606,11 @@ Canonical text limits are synchronized in OpenAPI/backend and duplicated as data
 - Personal records are a rebuildable projection for auditable discovery/query speed.
 - Weekly metrics and AI proposals are versioned documents whose exact historical shape matters, so typed JSONB is appropriate with schema-versioned backend validation.
 
-## 13. Migration guidance for later implementation
+## 13. Migration implementation and operations
 
-No migration is part of the current design task. When implementation begins:
-
-- use `golang-migrate` numbered up/down files;
-- create tables in ownership order and indexes explicitly;
-- verify both forward migration from empty DB and rollback in integration tests;
-- test constraints with cross-user and invalid-state fixtures;
-- assess lock duration before adding indexes/constraints to populated tables;
-- never rely on application startup to auto-migrate production;
-- ensure all selected PostgreSQL and Go dependencies remain compatible with Go 1.22.2.
+- `golang-migrate` owns numbered up/down execution. The initial migration creates all documented tables in ownership order and indexes explicitly; rollback drops them in strict reverse order.
+- The API never auto-migrates. Compose runs a single one-shot `migrate` service after PostgreSQL becomes healthy, and backend startup waits for its successful completion.
+- PostgreSQL integration tests apply the schema to an empty disposable database, test UTC sessions, transaction commit/rollback, a cross-user composite-FK failure and idempotent seed behavior, then execute the full rollback.
+- `make migrate-down` rolls back one migration. With only the initial migration present, that removes the complete application schema and must never target a non-disposable database unintentionally.
+- Before later migrations add indexes or constraints to populated tables, assess lock duration and provide an upgrade test from the preceding version.
+- pgx v5.7.2 and golang-migrate v4.18.2 are pinned because their declared minimum Go versions remain compatible with Go 1.22.2.

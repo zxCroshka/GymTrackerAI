@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: first executable foundation slice implemented; later slices sequenced
+Status: executable HTTP/frontend and PostgreSQL foundation slices implemented; later business slices sequenced
 
 Last updated: 2026-08-02
 
@@ -16,7 +16,8 @@ The modular-monolith boundaries in `architecture.md`, schema in `database-schema
 - Frontend uses installed Node.js 22, npm 10, and an npm lockfile. Do not use pnpm, Yarn, or Bun.
 - Use `docker compose`, not `docker-compose`.
 - Docker CLI/Compose are installed, but the current user cannot reach the Docker daemon. Do not use `sudo` or modify host permissions. PostgreSQL/container integration checks remain an explicitly reported environment blocker until access is supplied.
-- Foundation dependencies are now locked in `backend/go.sum` and `frontend/package-lock.json`. Subject-area migrations remain out of scope until their vertical slices.
+- Foundation dependencies are locked in `backend/go.sum` and `frontend/package-lock.json`, including pgx v5.7.2 and golang-migrate v4.18.2 with compatible Go directives.
+- At the user's explicit request, the complete agreed schema was migrated before business-module implementation. This changes sequencing, not module ownership: no empty business layers or handlers were introduced, and each later vertical slice must test and use its owned existing tables. Future schema changes use incremental migrations.
 
 ## 3. Phase 0 — design baseline (completed)
 
@@ -38,7 +39,7 @@ Historical exit gate at completion of Phase 0:
 
 ## 4. Phase 1 — executable foundation and contracts
 
-Implementation was authorized by the subsequent foundation request. The first slice now provides the Go/chi server and middleware, app-only health checks, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, and CI. Database/pgx readiness, the initial OpenAPI document, API client/auth shells, and migrations remain explicit later work within this phase or the next owning vertical slice; they are not represented by placeholders.
+Implementation was authorized by subsequent foundation requests. The slices now provide the Go/chi server and middleware, PostgreSQL startup/readiness foundation, full initial schema and rollback, one-shot migration and seed commands, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, and CI. The initial OpenAPI document and API client/auth shells remain later work; they are not represented by placeholders.
 
 Deliverables:
 
@@ -47,7 +48,7 @@ Deliverables:
 - initial OpenAPI 3.1 document with common envelope/problem/pagination/security/header schemas;
 - Next.js TypeScript App Router setup using npm, Tailwind, accessible UI primitives, lint/type-check/build, API client boundary, and auth/app shells;
 - `compose.yaml` for web/api/PostgreSQL, Dockerfiles, `.env.example` with placeholders only, `.gitignore`, Makefile, and GitHub Actions;
-- explicit migration command/process, but only foundation migrations required by the first implemented vertical slice;
+- explicit one-shot migration command/process and complete initial agreed schema, delivered ahead of owning use cases by explicit request;
 - CI caching and least-privilege permissions.
 
 Verification:
@@ -65,7 +66,7 @@ Exit gate: a real health/readiness slice runs, fails fast on bad configuration, 
 
 Deliverables:
 
-- migrations for `users`, `user_profiles`, `refresh_tokens`, `idempotency_keys`, and initial `audit_events`;
+- auth/profile persistence and queries against the existing foundation tables, with incremental migrations only for reviewed schema changes;
 - Argon2id password hashing, JWT claim/algorithm/purpose validation, separate access/refresh keys, refresh cookie/rotation/reuse-family revocation, auth version, logout/session management;
 - registration transaction creating default profile; authenticated profile read/update with ETag; versioned AI enablement/notice/disable cancellation settings; password-confirmed account soft deletion/session revocation;
 - exact CORS/origin/cookie/security-header policy;
@@ -86,7 +87,7 @@ Exit gate: two fixture users cannot discover or mutate one another; all document
 
 Deliverables:
 
-- migrations for `exercises`, `programs`, `program_days`, and `program_day_exercises` with checks/composite FKs/partial indexes;
+- exercise/program persistence against existing checked, tenant-safe foundation tables;
 - seed strategy for reviewed global exercises (deterministic data, not migration-time network calls);
 - search/filter and owned custom-exercise archive/restore;
 - complete program aggregate CRUD, ordering, version/ETag, active replacement, inactive/archive lifecycle;
@@ -106,7 +107,7 @@ Exit gate: a user can create and activate a valid multi-day program; database co
 
 Deliverables:
 
-- migrations for `workouts`, `workout_exercises`, and `workout_sets` including snapshot/tenant/version constraints;
+- workout persistence against existing snapshot/tenant/version-constrained foundation tables;
 - create blank/planned workout and instantiate from authorized program day/version;
 - start, ordered exercise/set edits, complete/cancel, explicit reopen/correction and history filters;
 - transactional immutable snapshots and root ETag increments;
@@ -126,7 +127,7 @@ Exit gate: program-to-completed-workout-to-history journey is reliable and later
 
 Deliverables:
 
-- migrations for `body_measurements`, `daily_wellness`, and `personal_records`;
+- measurement/progress persistence against existing foundation tables;
 - body/wellness CRUD with item ETags, canonical units, backend-calculated UTC/IANA civil-day boundary and uniqueness;
 - deterministic personal-record recalculation tied to workout completion/reopen;
 - bounded progress summary, body, volume, exercise and record endpoints with calculation versions;
@@ -147,7 +148,7 @@ Exit gate: charts/records are reproducible from source sets/measurements, bounde
 
 Deliverables:
 
-- migration for revisioned `weekly_reports` and relevant source indexes;
+- report persistence against the existing revisioned `weekly_reports` table and source indexes;
 - deterministic metric schema/version, UTC week-boundary calculation from profile IANA zone, pending/generating/ready/failed/stale states;
 - internal runner claim/lease/retry/backpressure behavior with attempt fencing and idempotent generation/regeneration;
 - capture deterministic metrics/cutoff in one short repeatable-read snapshot, preserve old current artifact until a replacement is ready, and mark reports stale on every affecting workout/measurement/wellness source mutation;
@@ -169,7 +170,7 @@ Prerequisite: effective OpenAI project data controls, a versioned data-use notic
 
 Deliverables:
 
-- migrations for `coach_conversations`, `coach_messages`, `coach_tool_calls`, and `coach_recommendations`;
+- coach persistence against existing foundation tables, with the security invariants revalidated in module integration tests;
 - server-only Responses API adapter with `store: false`, configured tested model/snapshot, safety identifier, timeouts and bounded retries; extract only a technical `platform/openai` HTTP/auth/redaction transport when report insight becomes its second concrete caller;
 - static versioned developer policy, only bounded same-conversation direct text context, all profile/training/body/wellness/progress/report facts through safe backend tools, and moderation/safety response handling;
 - strict sequential tool registry exactly as scoped in `ai-coach.md` using module public ports and minimized audit;

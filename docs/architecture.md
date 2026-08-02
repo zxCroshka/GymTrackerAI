@@ -32,7 +32,11 @@ The implemented Compose topology is:
 
 - `frontend`: Next.js application;
 - `backend`: Go application that will contain all nine business modules and a lightweight internal pending-work runner;
-- `postgres`: PostgreSQL with a persistent named volume.
+- `postgres`: PostgreSQL with a persistent named volume;
+- `migrate`: one-shot deployment task that applies numbered `golang-migrate` files once before backend startup;
+- `db-seed`: opt-in `tools` profile task for the reviewed system exercise catalogue.
+
+`migrate` and `db-seed` are lifecycle tasks built from the same backend repository, not long-running services or module boundaries. API replicas never run migrations themselves, which prevents concurrent startup migration races.
 
 This remains a modular monolith. The pending-work runner is part of the same codebase/process and calls the same application services; it is not a separate service boundary. Multiple `api` replicas may be introduced later only if PostgreSQL row locking/advisory locking prevents duplicate work.
 

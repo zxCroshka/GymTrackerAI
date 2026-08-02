@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/config"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/database"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/httpserver"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/logging"
 )
@@ -34,7 +35,18 @@ func run() error {
 		return fmt.Errorf("configure logger: %w", err)
 	}
 
-	readiness := httpserver.NewReadiness()
+	pool, err := database.OpenPool(context.Background(), cfg.Database)
+	if err != nil {
+		return fmt.Errorf("initialize database: %w", err)
+	}
+	defer pool.Close()
+	logger.Info(
+		"PostgreSQL pool ready",
+		slog.Int("min_connections", int(cfg.Database.MinConnections)),
+		slog.Int("max_connections", int(cfg.Database.MaxConnections)),
+	)
+
+	readiness := httpserver.NewReadiness(pool, cfg.Database.PingTimeout)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress(),
 		Handler:           httpserver.NewHandler(logger, readiness),

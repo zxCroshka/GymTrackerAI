@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -9,10 +10,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthEndpoints(t *testing.T) {
-	readiness := NewReadiness()
+	database := &stubDatabasePinger{}
+	readiness := NewReadiness(database, time.Second)
 	handler := NewHandler(discardLogger(), readiness)
 
 	t.Run("liveness", func(t *testing.T) {
@@ -46,10 +49,19 @@ func TestHealthEndpoints(t *testing.T) {
 			t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 		}
 	})
+
+	t.Run("readiness when database is unavailable", func(t *testing.T) {
+		database.err = io.EOF
+		response := performRequest(handler, http.MethodGet, "/health/ready", "ready-request-3")
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+		}
+		database.err = nil
+	})
 }
 
 func TestRouterUsesUnifiedProblems(t *testing.T) {
-	handler := NewHandler(discardLogger(), NewReadiness())
+	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second))
 
 	tests := []struct {
 		name     string
@@ -73,6 +85,19 @@ func TestRouterUsesUnifiedProblems(t *testing.T) {
 	}
 }
 
+func TestReadinessBoundsDatabasePing(t *testing.T) {
+	readiness := NewReadiness(blockingDatabasePinger{}, 10*time.Millisecond)
+	readiness.SetReady(true)
+
+	started := time.Now()
+	if readiness.Ready(context.Background()) {
+		t.Fatal("readiness unexpectedly succeeded")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("database ping was not bounded: %v", elapsed)
+	}
+}
+
 func TestRecovererDoesNotExposePanicValue(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -91,7 +116,7 @@ func TestRecovererDoesNotExposePanicValue(t *testing.T) {
 }
 
 func TestInvalidRequestIDIsReplaced(t *testing.T) {
-	handler := NewHandler(discardLogger(), NewReadiness())
+	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second))
 	response := performRequest(handler, http.MethodGet, "/health/live", "invalid request ID")
 
 	generated := response.Header().Get(requestIDHeader)
@@ -129,4 +154,19 @@ func decodeJSON(t *testing.T, reader io.Reader, target any) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type stubDatabasePinger struct {
+	err error
+}
+
+func (p *stubDatabasePinger) Ping(context.Context) error {
+	return p.err
+}
+
+type blockingDatabasePinger struct{}
+
+func (blockingDatabasePinger) Ping(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
 }

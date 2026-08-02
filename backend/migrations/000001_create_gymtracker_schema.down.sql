@@ -1,0 +1,22 @@
+SET TIME ZONE 'UTC';
+
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS weekly_reports;
+DROP TABLE IF EXISTS coach_recommendations;
+DROP TABLE IF EXISTS coach_tool_calls;
+DROP TABLE IF EXISTS coach_messages;
+DROP TABLE IF EXISTS coach_conversations;
+DROP TABLE IF EXISTS personal_records;
+DROP TABLE IF EXISTS daily_wellness;
+DROP TABLE IF EXISTS body_measurements;
+DROP TABLE IF EXISTS workout_sets;
+DROP TABLE IF EXISTS workout_exercises;
+DROP TABLE IF EXISTS workouts;
+DROP TABLE IF EXISTS program_day_exercises;
+DROP TABLE IF EXISTS program_days;
+DROP TABLE IF EXISTS programs;
+DROP TABLE IF EXISTS exercises;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS user_profiles;
+DROP TABLE IF EXISTS users;

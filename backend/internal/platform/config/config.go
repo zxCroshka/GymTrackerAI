@@ -20,9 +20,29 @@ const (
 	defaultHTTPWriteTimeout      = 15 * time.Second
 	defaultHTTPIdleTimeout       = 60 * time.Second
 	defaultHTTPShutdownTimeout   = 10 * time.Second
+	defaultDBConnectTimeout      = 5 * time.Second
+	defaultDBPingTimeout         = 2 * time.Second
+	defaultDBMinConnections      = int32(1)
+	defaultDBMaxConnections      = int32(10)
+	defaultDBMaxConnLifetime     = 30 * time.Minute
+	defaultDBMaxConnIdleTime     = 5 * time.Minute
+	defaultDBHealthCheckPeriod   = time.Minute
 )
 
-// Config contains only foundation settings currently consumed by the API.
+// DatabaseConfig contains the PostgreSQL pool settings shared by API and
+// database maintenance commands.
+type DatabaseConfig struct {
+	URL               string
+	ConnectTimeout    time.Duration
+	PingTimeout       time.Duration
+	MinConnections    int32
+	MaxConnections    int32
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
+}
+
+// Config contains foundation settings currently consumed by the API.
 type Config struct {
 	AppName               string
 	Environment           string
@@ -34,11 +54,17 @@ type Config struct {
 	HTTPWriteTimeout      time.Duration
 	HTTPIdleTimeout       time.Duration
 	HTTPShutdownTimeout   time.Duration
+	Database              DatabaseConfig
 }
 
 // Load reads and validates configuration from environment variables.
 func Load() (Config, error) {
 	return load(os.Getenv)
+}
+
+// LoadDatabase reads only PostgreSQL settings for migration and seed commands.
+func LoadDatabase() (DatabaseConfig, error) {
+	return loadDatabase(os.Getenv)
 }
 
 func load(getenv func(string) string) (Config, error) {
@@ -80,6 +106,53 @@ func load(getenv func(string) string) (Config, error) {
 	cfg.HTTPShutdownTimeout, err = parsePositiveDuration("HTTP_SHUTDOWN_TIMEOUT", getenv("HTTP_SHUTDOWN_TIMEOUT"), defaultHTTPShutdownTimeout)
 	if err != nil {
 		return Config{}, err
+	}
+	cfg.Database, err = loadDatabase(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+func loadDatabase(getenv func(string) string) (DatabaseConfig, error) {
+	databaseURL := strings.TrimSpace(getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return DatabaseConfig{}, fmt.Errorf("DATABASE_URL is required")
+	}
+
+	cfg := DatabaseConfig{URL: databaseURL}
+	var err error
+	cfg.ConnectTimeout, err = parsePositiveDuration("DB_CONNECT_TIMEOUT", getenv("DB_CONNECT_TIMEOUT"), defaultDBConnectTimeout)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	cfg.PingTimeout, err = parsePositiveDuration("DB_PING_TIMEOUT", getenv("DB_PING_TIMEOUT"), defaultDBPingTimeout)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	cfg.MinConnections, err = parseConnectionCount("DB_MIN_CONNS", getenv("DB_MIN_CONNS"), defaultDBMinConnections, true)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	cfg.MaxConnections, err = parseConnectionCount("DB_MAX_CONNS", getenv("DB_MAX_CONNS"), defaultDBMaxConnections, false)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	if cfg.MinConnections > cfg.MaxConnections {
+		return DatabaseConfig{}, fmt.Errorf("DB_MIN_CONNS must not exceed DB_MAX_CONNS")
+	}
+	cfg.MaxConnLifetime, err = parsePositiveDuration("DB_MAX_CONN_LIFETIME", getenv("DB_MAX_CONN_LIFETIME"), defaultDBMaxConnLifetime)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	cfg.MaxConnIdleTime, err = parsePositiveDuration("DB_MAX_CONN_IDLE_TIME", getenv("DB_MAX_CONN_IDLE_TIME"), defaultDBMaxConnIdleTime)
+	if err != nil {
+		return DatabaseConfig{}, err
+	}
+	cfg.HealthCheckPeriod, err = parsePositiveDuration("DB_HEALTH_CHECK_PERIOD", getenv("DB_HEALTH_CHECK_PERIOD"), defaultDBHealthCheckPeriod)
+	if err != nil {
+		return DatabaseConfig{}, err
 	}
 
 	return cfg, nil
@@ -138,4 +211,19 @@ func parsePositiveDuration(name, value string, fallback time.Duration) (time.Dur
 		return 0, fmt.Errorf("%s must be a positive Go duration", name)
 	}
 	return duration, nil
+}
+
+func parseConnectionCount(name, value string, fallback int32, allowZero bool) (int32, error) {
+	if strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	count, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || count < 0 || (!allowZero && count == 0) {
+		if allowZero {
+			return 0, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return int32(count), nil
 }

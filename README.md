@@ -39,11 +39,14 @@ Repository-wide Codex rules are defined in [AGENTS.md](AGENTS.md).
 The monorepo now contains a working technical foundation:
 
 - a Go 1.22.2-compatible API using chi, environment configuration, structured JSON logging, request IDs, panic recovery, request logging, graceful shutdown, and unified problem responses;
+- a pgxpool PostgreSQL connection with bounded connect/ping timeouts, configurable pool limits, UTC sessions, startup ping, clean shutdown, and database-aware `GET /health/ready`;
+- complete numbered golang-migrate forward/rollback SQL for the agreed normalized schema, plus a separate one-shot Compose migration service;
+- an idempotent seed command with a small deterministic baseline system exercise catalogue and a concrete pgx transaction helper;
 - `GET /health/live` and `GET /health/ready` operational endpoints;
 - a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
 - reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
 
-Authorization, database access/migrations, exercises, programs, workouts, reports, progress features, and AI Coach are intentionally not implemented yet. The PostgreSQL Compose service is prepared, but backend readiness currently reflects only application state.
+Authorization and all exercise, program, workout, measurement, progress, report, and AI Coach use cases remain intentionally unimplemented. Their PostgreSQL tables now exist as foundation only; no business handlers or repositories were added.
 
 ## Local development
 
@@ -55,10 +58,24 @@ Create an untracked local environment file before using Compose:
 cp .env.example .env
 ```
 
-Run backend and frontend in separate terminals:
+The simplest complete startup uses Compose. It waits for PostgreSQL health, runs migrations once in the dedicated `migrate` container, then starts the API and frontend:
 
 ```bash
+make compose-up
+```
+
+To run Go commands directly on the host, export the untracked environment and make sure `DATABASE_URL` points to an already reachable PostgreSQL instance. The API now fails fast when the URL is missing or startup ping fails:
+
+```bash
+set -a
+source .env
+set +a
 make backend-run
+```
+
+Run the frontend separately if needed:
+
+```bash
 make frontend-dev
 ```
 
@@ -73,11 +90,20 @@ curl http://localhost:8080/health/ready
 
 - `make backend-run` — run the API locally.
 - `make backend-test` — run Go tests.
+- `make backend-integration-test` — run destructive up/down foundation tests against the dedicated disposable database in `TEST_DATABASE_URL`.
 - `make backend-fmt` — format Go files.
 - `make frontend-dev` — run the Next.js development server.
 - `make frontend-test` — run frontend unit tests.
 - `make frontend-build` — create a production frontend build.
 - `make compose-up` — build and start PostgreSQL, backend, and frontend.
 - `make compose-down` — stop the Compose stack without deleting its database volume.
+- `make migrate-up` — run all pending migrations in a one-shot container.
+- `make migrate-down` — roll back one migration in a one-shot container; currently this removes the whole application schema.
+- `make migrate-create name=add_example` — create a UTC-versioned up/down migration pair initialized with UTC session setup.
+- `make db-seed` — idempotently install/update the baseline system exercise catalogue.
 
-Docker and the Compose plugin are installed in the current development environment, but the current user may not be able to access the Docker daemon. Do not use `sudo` or alter host permissions; `docker compose --env-file .env.example config --quiet` can still validate the Compose file statically.
+Schema migration is never performed by API startup. The Compose `backend` service depends on successful completion of the one-shot `migrate` service, so multiple API replicas cannot race to migrate the database.
+
+PostgreSQL integration tests require a dedicated disposable database because they perform full forward and rollback migrations. They intentionally fail, rather than skip, when run with the `integration` tag without `TEST_DATABASE_URL`. GitHub Actions provisions `gymtracker_test` and runs them with PostgreSQL 16.
+
+Docker and the Compose plugin are installed in the current development environment, but the current user may not be able to access the Docker daemon. Do not use `sudo` or alter host permissions; `docker compose --env-file .env.example config --quiet` can still validate the Compose file statically. Without daemon access, container builds and PostgreSQL-backed integration execution cannot run locally and must be reported explicitly.

@@ -18,7 +18,7 @@ func NewHandler(logger *slog.Logger, readiness *Readiness) http.Handler {
 		writeHealth(w, r, http.StatusOK, "ok")
 	})
 	router.Get("/health/ready", func(w http.ResponseWriter, r *http.Request) {
-		if !readiness.Ready() {
+		if !readiness.Ready(r.Context()) {
 			writeProblem(w, r, http.StatusServiceUnavailable, "not_ready", "Service unavailable", "Application is not ready")
 			return
 		}
