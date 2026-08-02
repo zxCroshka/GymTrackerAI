@@ -22,15 +22,8 @@ export class ApiClient {
   ) {}
 
   async request<T>(path: string, options: ApiRequestOptions = {}): Promise<ApiResponse<T>> {
-    const authenticated = options.authenticated ?? true;
-    let response = await this.perform(path, options, authenticated);
+    const response = await this.raw(path, options);
 
-    if (response.status === 401 && authenticated && (options.retryAuthentication ?? true)) {
-      const refreshed = await this.auth.refreshAccessToken();
-      if (refreshed) response = await this.perform(path, options, true);
-    }
-
-    if (!response.ok) throw await parseApiError(response);
     if (response.status === 204) {
       return { data: undefined as T, meta: { request_id: response.headers.get("X-Request-ID") ?? "" }, etag: null, response };
     }
@@ -45,6 +38,19 @@ export class ApiClient {
       throw new ApiError({ message: "Invalid API envelope", status: response.status, code: "invalid_response" });
     }
     return { data: envelope.data, meta: envelope.meta, etag: response.headers.get("ETag"), response };
+  }
+
+  async raw(path: string, options: ApiRequestOptions = {}): Promise<Response> {
+    const authenticated = options.authenticated ?? true;
+    let response = await this.perform(path, options, authenticated);
+
+    if (response.status === 401 && authenticated && (options.retryAuthentication ?? true)) {
+      const refreshed = await this.auth.refreshAccessToken();
+      if (refreshed) response = await this.perform(path, options, true);
+    }
+
+    if (!response.ok) throw await parseApiError(response);
+    return response;
   }
 
   private async perform(path: string, options: ApiRequestOptions, authenticated: boolean): Promise<Response> {
