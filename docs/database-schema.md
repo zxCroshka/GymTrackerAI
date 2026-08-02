@@ -17,7 +17,7 @@ Last updated: 2026-08-02
 - Every foreign-key column has a supporting index unless it is already the leading part of a unique/primary index.
 - JSONB is limited to versioned document snapshots: typed coach proposals, minimized tool audit summaries, report metrics, and idempotent response replay. Core training data remains relational.
 
-The executable definition is `backend/migrations/000001_create_gymtracker_schema.up.sql`; its paired `.down.sql` file is the complete rollback. Constraint and index names are explicit there. Future changes must use new numbered migrations rather than editing an already shared migration.
+The executable definition starts in `backend/migrations/000001_create_gymtracker_schema.up.sql`. `000002_extend_user_profiles` adds the implemented typed profile/import fields and normalized notes. Every migration has a complete paired rollback. Future changes use new numbered migrations rather than editing shared migration history.
 
 ## 2. Tenant isolation pattern
 
@@ -38,6 +38,7 @@ PostgreSQL row-level security is not part of the first implementation. It is a p
 ```mermaid
 erDiagram
     users ||--|| user_profiles : has
+    user_profiles ||--o{ user_profile_notes : contains
     users ||--o{ refresh_tokens : owns
     users ||--o{ exercises : customizes
     users ||--o{ programs : owns
@@ -84,12 +85,17 @@ Indexes: unique `email`; `status` for administrative/purge work. Status/timestam
 |---|---|---:|---|
 | `user_id` | `uuid` | no | PK, FK `users(id) ON DELETE CASCADE` |
 | `display_name` | `text` | yes | trimmed, max length defined by API |
+| `sex` | `text` | yes | `male`, `female`, `other`, `prefer_not_to_say` |
+| `birth_date` | `date` | yes | civil date, not an instant; at least 1900-01-01 |
 | `timezone` | `text` | no | default `UTC`; backend validates IANA identifier |
 | `locale` | `text` | no | default `ru-RU`; supported allowlist |
 | `preferred_unit_system` | `text` | no | `metric`, `imperial` |
 | `height_cm` | `numeric(6,2)` | yes | `> 0` and within API human range |
 | `experience_level` | `text` | yes | `beginner`, `intermediate`, `advanced` |
-| `training_goal` | `text` | yes | bounded user-authored summary |
+| `goal` | `text` | yes | `muscle_gain`, `weight_loss`, `recomposition`, `strength`, `maintenance` |
+| `training_frequency` | `smallint` | yes | `1..7` sessions per week |
+| `sleep_hours_average` | `numeric(3,1)` | yes | `0..24`; accepted by strict profile import |
+| `training_goal` | `text` | yes | legacy reserved free-text field; not exposed by current profile API |
 | `ai_coach_enabled` | `boolean` | no | default false; gates provider/tool processing |
 | `ai_notice_version` | `text` | yes | required while enabled; reviewed notice identifier |
 | `ai_enabled_at` | `timestamptz` | yes | required while enabled |
@@ -99,6 +105,10 @@ Indexes: unique `email`; `status` for administrative/purge work. Status/timestam
 | `updated_at` | `timestamptz` | no | UTC |
 
 Registration creates `users` and `user_profiles` in one transaction.
+
+### 4.2.1 `user_profile_notes` (`user` module)
+
+Imported free-text notes are normalized rather than hidden in JSON. Rows have backend UUID `id`, profile `user_id` with `ON DELETE CASCADE`, unique bounded `position` (`1..20`), trimmed `content` (1–1000 characters), and UTC `created_at`/`updated_at`. Import replaces this ordered collection only when the `notes` property is present.
 
 ### 4.3 `refresh_tokens` (`auth` module)
 
@@ -121,7 +131,7 @@ Only a SHA-256 hash of the complete refresh JWT is stored, never the token itsel
 | `created_at` | `timestamptz` | no | UTC |
 | `updated_at` | `timestamptz` | no | UTC lifecycle update |
 
-Constraints/indexes: `UNIQUE (id, user_id, family_id)`; the replacement relation is `(replaced_by_token_id, user_id, family_id) -> refresh_tokens(id, user_id, family_id) ON DELETE NO ACTION`, guaranteeing the same owner/family; active `(user_id, expires_at) WHERE revoked_at IS NULL`; `(user_id, family_id, created_at DESC)`; unique `jti`, `token_hash`, and non-null `replaced_by_token_id`. Reuse of a rotated token revokes its entire family and increments `auth_version` when policy requires global invalidation.
+Constraints/indexes: `UNIQUE (id, user_id, family_id)`; the replacement relation is `(replaced_by_token_id, user_id, family_id) -> refresh_tokens(id, user_id, family_id) ON DELETE NO ACTION`, guaranteeing the same owner/family; active `(user_id, expires_at) WHERE revoked_at IS NULL`; `(user_id, family_id, created_at DESC)`; unique `jti`, `token_hash`, and non-null `replaced_by_token_id`. The implemented conservative replay policy revokes every still-active refresh token for the user and increments `auth_version`, invalidating access tokens as well.
 
 ## 5. Exercise and program tables
 

@@ -142,45 +142,28 @@ Program-tree mutations require the current program ETag; workout-tree mutations 
 
 ## 5. Auth module
 
-Refresh JWTs are accepted only from the configured `Secure; HttpOnly; SameSite=Lax` cookie. Login/refresh returns the access token in JSON; the frontend retains it in memory. Auth responses always use `Cache-Control: no-store`.
+Refresh JWTs are accepted only from the configured `HttpOnly; SameSite=Lax` cookie (`Secure` is mandatory in production). Access tokens are returned in JSON and auth responses use `Cache-Control: no-store`. Refresh and logout additionally require an exact allowed `Origin` or `Referer`.
 
 | Method | Route | Auth | Input/result |
 |---|---|---|---|
-| `POST` | `/auth/register` | public | email/password/profile defaults; `201` user + access token and refresh cookie |
-| `POST` | `/auth/login` | public | email/password; `200` user + access token and rotated/new refresh cookie |
+| `POST` | `/auth/register` | public | email/password; `201` user + access token and refresh cookie |
+| `POST` | `/auth/login` | public | email/password; `200` user + access token and new refresh cookie |
 | `POST` | `/auth/refresh` | refresh cookie | no JSON body; `200` access token + rotated refresh cookie |
-| `POST` | `/auth/logout` | access + refresh | revoke current family/session and clear cookie; `204` |
-| `POST` | `/auth/logout-all` | access | increment auth version, revoke all refresh tokens, clear cookie; `204` |
-| `GET` | `/auth/sessions` | access | active refresh families without JWT/hash; exposes stable `family_id` as `session_id`; `200` |
-| `DELETE` | `/auth/sessions/{session_id}` | access | revoke the owned refresh family identified by `family_id`; `204` |
-| `POST` | `/auth/password/change` | access + recent password | current/new password; revoke sessions according to policy; `204` |
+| `POST` | `/auth/logout` | access + refresh | revoke current family and clear cookie; `204` |
 
-Registration request example:
-
-```json
-{
-  "email": "athlete@example.com",
-  "password": "user-supplied-secret",
-  "timezone": "Europe/Moscow",
-  "locale": "ru-RU",
-  "preferred_unit_system": "metric"
-}
-```
-
-Token response fields include `access_token`, `token_type: "Bearer"`, and `expires_in`; refresh token is never in JSON. Password-reset/email-change routes are intentionally absent until verification/reset token storage and policy are designed.
+Credentials have a 320-byte maximum normalized email and a password of 12–128 Unicode characters and at most 256 bytes. Token response fields are `user_id`, `email`, `access_token`, and `access_expires_at`; refresh token is never in JSON. Unknown email and wrong password both return the same `401 invalid_credentials` problem. Password-reset/email-change/session-list/logout-all routes are intentionally absent until their complete policies are implemented.
 
 ## 6. User module
 
 | Method | Route | Concurrency | Behavior |
 |---|---|---|---|
-| `GET` | `/users/me` | — | authentication identity/status summary; no password/auth version |
-| `GET` | `/users/me/profile` | returns ETag | profile/preferences |
-| `PATCH` | `/users/me/profile` | `If-Match` required | partial profile update; `200` |
-| `GET` | `/users/me/ai-settings` | returns profile ETag | enabled state and current/accepted notice versions; no provider key |
-| `PATCH` | `/users/me/ai-settings` | profile `If-Match` required | enable only with current `notice_version`; disable fences/cancels pending coach/insight work; `200` |
-| `POST` | `/users/me/deletion` | current password required | synchronously soft-delete and revoke sessions; physical purge is later; `204` |
+| `GET` | `/profile` | returns ETag | current authenticated user's profile |
+| `PATCH` | `/profile` | `If-Match` required | strict partial profile update; `200` |
+| `POST` | `/profile/import` | `If-Match` required | strict transactional JSON import and optional initial body measurement; `200` |
 
-Profile fields: `display_name`, `timezone`, `locale`, `preferred_unit_system`, `height_cm`, `experience_level`, `training_goal`, `version`, and UTC timestamps. Email cannot be changed through the profile PATCH. AI settings expose `ai_coach_enabled`, current/accepted notice version, and enable/disable instants; enabling requires an explicit user action after displaying the current data-use notice. Account deletion accepts only `{ "current_password": "..." }`; password-bearing requests are never stored for idempotent replay.
+Profile fields are `name`, `sex`, `birth_date`, `height_cm`, `goal`, `experience_level`, `training_frequency`, `timezone`, `unit_system`, `sleep_hours_average`, imported `notes`, `version`, and UTC timestamps. Nullable PATCH fields can be cleared with JSON `null`; `timezone` and `unit_system` cannot be null. Supported goals are `muscle_gain`, `weight_loss`, `recomposition`, `strength`, and `maintenance`; levels are `beginner`, `intermediate`, and `advanced`.
+
+Profile ETags have the form `"profile:{user_id}:{version}"`. Import accepts exactly the fields in `docs/openapi.yaml`; unknown top-level/nested fields, trailing JSON, and empty imports are rejected. Notes are trimmed, bounded, and replaced only when `notes` is present. Weight or circumference data creates one `body_measurements` row in the same transaction with `source=import`; `biceps_cm` initializes both upper arms. Owner and measurement time always come from the backend.
 
 ## 7. Exercise module
 

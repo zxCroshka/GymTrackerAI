@@ -51,8 +51,8 @@ jobs:
         with:
           go-version: 1.22.2
           cache-dependency-path: backend/go.sum
-      - name: Test PostgreSQL foundation and migrations
-        run: go test -tags=integration ./internal/platform/database
+      - name: Test PostgreSQL repositories and migrations
+        run: go test -p 1 -tags=integration ./...
         working-directory: backend
 
   frontend:

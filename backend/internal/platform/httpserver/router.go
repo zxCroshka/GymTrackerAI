@@ -7,8 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// NewHandler wires the currently implemented operational HTTP surface.
-func NewHandler(logger *slog.Logger, readiness *Readiness) http.Handler {
+// NewHandler wires operational routes and the supplied modular-monolith API.
+func NewHandler(logger *slog.Logger, readiness *Readiness, registerAPI func(chi.Router)) http.Handler {
 	router := chi.NewRouter()
 	router.Use(requestID(logger))
 	router.Use(requestLogger(logger))
@@ -24,6 +24,9 @@ func NewHandler(logger *slog.Logger, readiness *Readiness) http.Handler {
 		}
 		writeHealth(w, r, http.StatusOK, "ready")
 	})
+	if registerAPI != nil {
+		router.Route("/api/v1", registerAPI)
+	}
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusNotFound, "not_found", "Not found", "Resource was not found")

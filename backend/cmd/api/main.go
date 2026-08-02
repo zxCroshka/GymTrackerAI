@@ -11,10 +11,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/auth"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/measurement"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/config"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/database"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/httpserver"
 	"github.com/zxCroshka/GymTrackerAI/backend/internal/platform/logging"
+	"github.com/zxCroshka/GymTrackerAI/backend/internal/user"
 )
 
 func main() {
@@ -46,10 +51,35 @@ func run() error {
 		slog.Int("max_connections", int(cfg.Database.MaxConnections)),
 	)
 
+	userRepository := user.NewRepository(pool)
+	measurementRepository := measurement.NewRepository()
+	measurementWriter := user.InitialMeasurementWriterFunc(func(ctx context.Context, tx pgx.Tx, value user.InitialMeasurement) error {
+		return measurementRepository.InsertInitial(ctx, tx, measurement.InitialMeasurement{
+			ID: value.ID, UserID: value.UserID, MeasuredAt: value.MeasuredAt,
+			WeightKG: value.WeightKG, ChestCM: value.ChestCM, WaistCM: value.WaistCM,
+			HipsCM: value.HipsCM, NeckCM: value.NeckCM, BicepsCM: value.BicepsCM,
+		})
+	})
+	userService := user.NewService(pool, userRepository, measurementWriter)
+	authRepository := auth.NewRepository(pool)
+	authService, err := auth.NewService(pool, authRepository, userRepository, auth.NewTokenManager(cfg.Auth))
+	if err != nil {
+		return fmt.Errorf("initialize auth service: %w", err)
+	}
+	authHandler := auth.NewHandler(authService, cfg.Auth, logger)
+	userHandler := user.NewHandler(userService, logger)
+	registerAPI := func(router chi.Router) {
+		authHandler.RegisterRoutes(router)
+		router.Group(func(private chi.Router) {
+			private.Use(authService.Middleware)
+			userHandler.RegisterRoutes(private)
+		})
+	}
+
 	readiness := httpserver.NewReadiness(pool, cfg.Database.PingTimeout)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress(),
-		Handler:           httpserver.NewHandler(logger, readiness),
+		Handler:           httpserver.NewHandler(logger, readiness, registerAPI),
 		ReadTimeout:       cfg.HTTPReadTimeout,
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 		WriteTimeout:      cfg.HTTPWriteTimeout,

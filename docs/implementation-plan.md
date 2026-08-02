@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: executable HTTP/frontend and PostgreSQL foundation slices implemented; later business slices sequenced
+Status: executable foundation plus backend auth/profile slice implemented; later product slices sequenced
 
 Last updated: 2026-08-02
 
@@ -39,7 +39,7 @@ Historical exit gate at completion of Phase 0:
 
 ## 4. Phase 1 — executable foundation and contracts
 
-Implementation was authorized by subsequent foundation requests. The slices now provide the Go/chi server and middleware, PostgreSQL startup/readiness foundation, full initial schema and rollback, one-shot migration and seed commands, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, and CI. The initial OpenAPI document and API client/auth shells remain later work; they are not represented by placeholders.
+Implementation was authorized by subsequent requests. The slices provide the Go/chi server and middleware, PostgreSQL startup/readiness foundation, full initial schema and rollback, one-shot migration and seed commands, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, CI, and an OpenAPI 3.1 source for implemented auth/profile routes. Frontend API/auth shells remain later work and are not represented by placeholders.
 
 Deliverables:
 
@@ -63,6 +63,8 @@ Verification:
 Exit gate: a real health/readiness slice runs, fails fast on bad configuration, and has no fake domain endpoints.
 
 ## 5. Phase 2 — persistence, auth, and profile
+
+Current completion: the requested backend subset is implemented—registration/login, access protection, refresh rotation/replay invalidation, logout/family revocation, own-profile GET/PATCH, and strict transactional JSON import with optional initial measurement. The incremental `000002` migration and OpenAPI/prose contracts are synchronized. Session administration, password change, AI settings, deletion, and all frontend forms remain deliberately future work.
 
 Deliverables:
 

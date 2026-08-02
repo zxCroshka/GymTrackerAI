@@ -46,6 +46,8 @@ A change that violates or weakens one of these invariants requires explicit docu
 - Compare/verify in bounded time and return the same public login error for unknown email and wrong password.
 - Increment `users.auth_version` and revoke refresh families on password change, account disable/delete, or confirmed compromise.
 
+The current encoded parameters are Argon2id v19, 64 MiB memory, three iterations, parallelism two, a 16-byte random salt, and a 32-byte result. Recalibration must preserve verification of existing PHC strings and remain within endpoint concurrency/resource budgets.
+
 ### 4.2 JWTs and refresh rotation
 
 - Access and refresh tokens are both JWTs but use separate signing keys, audiences/purpose claims, code paths, and TTLs. Initial targets are 15 minutes access and 30 days refresh.
@@ -54,8 +56,10 @@ A change that violates or weakens one of these invariants requires explicit docu
 - Signing keys come from deployment secrets. Rotation supports a bounded current/previous key window identified by an allowlisted `kid`; retirement waits no longer than the maximum token lifetime.
 - Refresh JWT is set only in a `Secure`, `HttpOnly`, `SameSite=Lax` cookie scoped as narrowly as routing permits. It is never returned in JSON or stored by JavaScript.
 - Access JWT is returned in login/refresh JSON, kept in browser memory, and sent in the Authorization header. Never persist it in local/session storage.
-- Store only SHA-256 refresh-token hash, JTI, family, expiry, replacement, and revocation metadata. Rotate on every successful refresh using a row lock. Reuse of a replaced/revoked token revokes its family and emits a security audit event.
-- Logout revokes the current session/family and clears the cookie; logout-all revokes all families and increments auth version.
+- Store only SHA-256 refresh-token hash, JTI, family, expiry, replacement, and revocation metadata. Rotate on every successful refresh using a row lock. The implemented conservative replay response to a replaced token revokes all active refresh tokens, increments `auth_version`, and emits a metadata-only security audit event.
+- Logout revokes the current session/family and clears the cookie; a future logout-all flow will revoke all families and increment auth version.
+
+The current single-instance slice accepts one active environment key per token purpose and therefore requires a coordinated restart/expiry window during key rotation. The planned `kid` current/previous window remains a release-hardening item; it was not added as speculative key-management infrastructure in the first auth slice.
 
 ### 4.3 Cookie-authenticated endpoint protection
 
@@ -67,6 +71,8 @@ Refresh and cookie-assisted logout routes check an exact trusted `Origin`/`Refer
 - Use progressive backoff/temporary throttling rather than permanent attacker-controlled account lockout.
 - Do not reveal account existence in login/reset behavior.
 - Record stable failure/reuse codes and request IDs, never attempted passwords/tokens.
+
+Current auth throttling is a per-process fixed-window limiter keyed by direct socket IP plus normalized email/digest. It deliberately ignores forwarded-IP headers until trusted proxies are configurable. A multi-replica/public deployment must add a shared edge or datastore limiter; the in-process limiter is defense in depth, not the only production abuse control.
 
 ## 5. Authorization and tenant isolation
 
@@ -213,7 +219,7 @@ Official details: [OpenAI data controls](https://developers.openai.com/api/docs/
 Required automated tests include:
 
 - password/JWT purpose/algorithm/expiry/issuer/audience/auth-version validation;
-- refresh rotation, replay, family revocation, concurrent refresh, logout/logout-all;
+- refresh rotation, replay, family revocation, concurrent refresh, and logout (plus logout-all when that route is added);
 - cross-user IDOR matrices for every private REST endpoint and every backend tool;
 - global versus custom exercise visibility/write rules;
 - SQL/filter/cursor/body/unknown-field/range fuzz and negative tests;

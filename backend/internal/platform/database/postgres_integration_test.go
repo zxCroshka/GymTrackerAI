@@ -199,6 +199,7 @@ func expectedFoundationTables() []string {
 	return []string{
 		"users",
 		"user_profiles",
+		"user_profile_notes",
 		"refresh_tokens",
 		"exercises",
 		"programs",

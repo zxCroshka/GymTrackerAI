@@ -7,7 +7,7 @@ backend-test:
 	cd backend && go test ./...
 
 backend-integration-test:
-	cd backend && go test -tags=integration ./internal/platform/database
+	cd backend && go test -p 1 -tags=integration ./...
 
 backend-fmt:
 	cd backend && gofmt -w .

@@ -108,6 +108,7 @@ An arrow means “uses a small public application/query port,” not permission 
 Cross-module workflows use an application coordinator and one shared pgx transaction where atomicity is required:
 
 - **Registration:** `auth` creates the identity and `user` creates the default profile atomically.
+- **Profile import:** `user` owns strict profile/notes validation and calls the narrow `measurement` initial-write port through composition-root wiring; profile, notes, and optional first measurement commit atomically.
 - **Start from program:** `workout` asks `program` for an authorized prescription snapshot and `exercise` for visible metadata, then owns the copied workout rows.
 - **Complete/reopen workout:** `workout` validates and changes status; `progress` recalculates affected personal records. Any completion/correction affecting an already generated period marks its current report stale. The coordinator commits all changes together.
 - **Source measurement/wellness mutation:** `measurement` changes the owned row and marks every current report covering the event/day before or after the mutation stale in the same transaction.
@@ -139,7 +140,7 @@ The first release permits at most one `in_progress` workout per user. The databa
 ## 7. Authentication and request context
 
 - Access JWT lifetime target: 15 minutes. It is returned in login/refresh JSON, held in browser memory, and sent as `Authorization: Bearer`.
-- Refresh JWT lifetime target: 30 days. It is stored only in a `Secure`, `HttpOnly`, `SameSite=Lax` cookie scoped to auth endpoints, rotated on every use, and represented in PostgreSQL only by a cryptographic hash and session/family metadata.
+- Refresh JWT lifetime target: 30 days. It is stored only in an `HttpOnly`, `SameSite=Lax` cookie scoped to auth endpoints (`Secure` required outside local HTTP development), rotated on every use, and represented in PostgreSQL only by a cryptographic hash and session/family metadata.
 - Both token types have distinct purpose/audience claims. Access claims contain `sub`, session/family ID, `jti`, issuer, audience, issued-at, and expiry, but no email, profile, or training data.
 - Request middleware verifies signature, purpose, issuer, audience, expiry, and user status, then creates an immutable server request context with authenticated user ID, session ID, request ID, and deadline.
 - Application services derive ownership from that context. Payload/path IDs select a resource but never establish its owner.
@@ -254,19 +255,19 @@ Metrics should cover request latency/error rates, pgx pool pressure/query durati
 
 Any future reversal requires documented evidence and migration/API/security impact.
 
-## 16. Proposed repository layout (not yet created)
+## 16. Repository layout
 
 ```text
 GymTrackerAI/
   AGENTS.md
   README.md
   docs/
+    openapi.yaml
   backend/
     cmd/api/
     internal/{auth,user,exercise,program,workout,measurement,progress,report,coach}/
     internal/platform/{config,database,httpserver,logging}/
     migrations/
-    openapi/
   frontend/
     app/
     features/
@@ -278,4 +279,4 @@ GymTrackerAI/
   .github/workflows/
 ```
 
-This is a future implementation layout, not authorization to create empty scaffolding. Folders are introduced only with working, tested functionality.
+Only folders backed by working functionality are introduced; empty business-module scaffolding remains forbidden.

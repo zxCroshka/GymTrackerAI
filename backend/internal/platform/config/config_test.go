@@ -49,6 +49,8 @@ func TestLoadReadsCustomValues(t *testing.T) {
 		"DB_MAX_CONN_LIFETIME":     "20m",
 		"DB_MAX_CONN_IDLE_TIME":    "3m",
 		"DB_HEALTH_CHECK_PERIOD":   "30s",
+		"JWT_ACCESS_SECRET":        "custom-access-secret-32-characters-minimum",
+		"JWT_REFRESH_SECRET":       "custom-refresh-secret-32-characters-minimum",
 	}
 
 	cfg, err := load(func(key string) string { return values[key] })
@@ -114,8 +116,37 @@ func TestLoadDatabaseValidatesRequiredURLAndPoolBounds(t *testing.T) {
 	}
 }
 
+func TestLoadAuthRejectsUnsafeLifetimeOriginAndSecrets(t *testing.T) {
+	tests := []map[string]string{
+		{"JWT_ACCESS_SECRET": "short"},
+		{"JWT_REFRESH_SECRET": "test-access-secret-32-characters-minimum"},
+		{"JWT_ACCESS_TTL": "31m"},
+		{"JWT_REFRESH_TTL": "15m"},
+		{"AUTH_ALLOWED_ORIGINS": "http://localhost:3000/path"},
+		{"APP_ENV": "production", "REFRESH_COOKIE_SECURE": "false", "AUTH_ALLOWED_ORIGINS": "https://gymtracker.example"},
+		{"APP_ENV": "production", "REFRESH_COOKIE_SECURE": "true", "AUTH_ALLOWED_ORIGINS": "http://gymtracker.example"},
+	}
+	for _, values := range tests {
+		if _, err := load(testEnvironment(values)); err == nil {
+			t.Fatalf("unsafe auth values accepted: %#v", values)
+		}
+	}
+}
+
 func testEnvironment(values map[string]string) func(string) string {
 	return func(key string) string {
+		if key == "JWT_ACCESS_SECRET" {
+			if value, ok := values[key]; ok {
+				return value
+			}
+			return "test-access-secret-32-characters-minimum"
+		}
+		if key == "JWT_REFRESH_SECRET" {
+			if value, ok := values[key]; ok {
+				return value
+			}
+			return "test-refresh-secret-32-characters-minimum"
+		}
 		if key == "DATABASE_URL" {
 			if value, ok := values[key]; ok {
 				return value

@@ -1,0 +1,523 @@
+openapi: 3.1.0
+info:
+  title: GymTracker AI API
+  version: 0.2.0
+  description: Implemented auth and user-profile contract. All instants are UTC RFC 3339 values.
+servers:
+  - url: http://localhost:8080/api/v1
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: User created; refresh token is set as an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Authenticated; refresh token is set as an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          description: The same invalid_credentials problem is used for an unknown email and a wrong password.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshTokens
+      description: Rotates the refresh cookie and returns a new access token. Requires an allowed Origin or Referer.
+      security:
+        - refreshCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "200":
+          description: Token pair rotated.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      description: Revokes the current refresh-token family and clears the cookie.
+      security:
+        - bearerAuth: []
+          refreshCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Logged out.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /profile:
+    get:
+      tags: [user]
+      operationId: getOwnProfile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user's profile.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ProfileETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+    patch:
+      tags: [user]
+      operationId: updateOwnProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfilePatch"
+      responses:
+        "200":
+          description: Updated profile.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ProfileETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileEnvelope"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+  /profile/import:
+    post:
+      tags: [user]
+      operationId: importOwnProfile
+      description: Strict, transactional import. Creates one initial body measurement when measurement data is present.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileImport"
+            example:
+              name: Руслан
+              sex: male
+              height_cm: 170
+              weight_kg: 66.7
+              goal: recomposition
+              training_frequency: 4
+              experience_level: intermediate
+              sleep_hours_average: 8
+              measurements:
+                chest_cm: 100
+                waist_cm: 77
+                hips_cm: 89
+                neck_cm: 38
+                biceps_cm: 36
+              notes:
+                - Цель — набор мышц с сохранением эстетичной формы
+                - Рабочие подходы выполняются близко к отказу
+      responses:
+        "200":
+          description: Imported profile and optional initial measurement identifier.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ProfileETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportEnvelope"
+        "400":
+          description: Malformed JSON, unsupported field, or trailing JSON.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "412":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "428":
+          $ref: "#/components/responses/Problem"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: gymtracker_refresh
+  parameters:
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string }
+      example: '"profile:018f4ea8-89af-47d7-b7e3-43d94f83292e:3"'
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uri
+  headers:
+    ProfileETag:
+      schema: { type: string }
+      example: '"profile:018f4ea8-89af-47d7-b7e3-43d94f83292e:3"'
+  responses:
+    Problem:
+      description: Problem response.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RateLimited:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 320
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+    AuthData:
+      type: object
+      additionalProperties: false
+      required: [user_id, email, access_token, access_expires_at]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        access_token:
+          type: string
+        access_expires_at:
+          type: string
+          format: date-time
+    AuthEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: "#/components/schemas/AuthData"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Profile:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - name
+        - sex
+        - birth_date
+        - height_cm
+        - goal
+        - experience_level
+        - training_frequency
+        - timezone
+        - unit_system
+        - sleep_hours_average
+        - notes
+        - version
+        - created_at
+        - updated_at
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 100
+        sex:
+          oneOf:
+            - $ref: "#/components/schemas/Sex"
+            - type: "null"
+        birth_date:
+          type: [string, "null"]
+          format: date
+        height_cm:
+          type: [number, "null"]
+          minimum: 50
+          maximum: 300
+        goal:
+          oneOf:
+            - $ref: "#/components/schemas/Goal"
+            - type: "null"
+        experience_level:
+          oneOf:
+            - $ref: "#/components/schemas/ExperienceLevel"
+            - type: "null"
+        training_frequency:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 7
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Europe/Moscow
+        unit_system:
+          $ref: "#/components/schemas/UnitSystem"
+        sleep_hours_average:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 24
+        notes:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProfilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 100
+        sex:
+          oneOf:
+            - $ref: "#/components/schemas/Sex"
+            - type: "null"
+        birth_date:
+          type: [string, "null"]
+          format: date
+        height_cm:
+          type: [number, "null"]
+          minimum: 50
+          maximum: 300
+        goal:
+          oneOf:
+            - $ref: "#/components/schemas/Goal"
+            - type: "null"
+        experience_level:
+          oneOf:
+            - $ref: "#/components/schemas/ExperienceLevel"
+            - type: "null"
+        training_frequency:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 7
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 255
+        unit_system:
+          $ref: "#/components/schemas/UnitSystem"
+    ProfileImport:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        sex:
+          $ref: "#/components/schemas/Sex"
+        height_cm:
+          type: number
+          minimum: 50
+          maximum: 300
+        weight_kg:
+          type: number
+          minimum: 20
+          maximum: 700
+        goal:
+          $ref: "#/components/schemas/Goal"
+        training_frequency:
+          type: integer
+          minimum: 1
+          maximum: 7
+        experience_level:
+          $ref: "#/components/schemas/ExperienceLevel"
+        sleep_hours_average:
+          type: number
+          minimum: 0
+          maximum: 24
+        measurements:
+          $ref: "#/components/schemas/ImportedMeasurements"
+        notes:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1000
+    ImportedMeasurements:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        chest_cm: { type: number, minimum: 5, maximum: 400 }
+        waist_cm: { type: number, minimum: 5, maximum: 400 }
+        hips_cm: { type: number, minimum: 5, maximum: 400 }
+        neck_cm: { type: number, minimum: 5, maximum: 200 }
+        biceps_cm: { type: number, minimum: 5, maximum: 200 }
+    ImportData:
+      type: object
+      additionalProperties: false
+      required: [profile, initial_measurement_id]
+      properties:
+        profile:
+          $ref: "#/components/schemas/Profile"
+        initial_measurement_id:
+          type: [string, "null"]
+          format: uuid
+    ProfileEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: "#/components/schemas/Profile"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ImportEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: "#/components/schemas/ImportData"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    Meta:
+      type: object
+      additionalProperties: false
+      required: [request_id]
+      properties:
+        request_id:
+          type: string
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance, code, request_id]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        request_id: { type: string }
+    Goal:
+      type: string
+      enum: [muscle_gain, weight_loss, recomposition, strength, maintenance]
+    ExperienceLevel:
+      type: string
+      enum: [beginner, intermediate, advanced]
+    Sex:
+      type: string
+      enum: [male, female, other, prefer_not_to_say]
+    UnitSystem:
+      type: string
+      enum: [metric, imperial]

@@ -16,7 +16,7 @@ import (
 func TestHealthEndpoints(t *testing.T) {
 	database := &stubDatabasePinger{}
 	readiness := NewReadiness(database, time.Second)
-	handler := NewHandler(discardLogger(), readiness)
+	handler := NewHandler(discardLogger(), readiness, nil)
 
 	t.Run("liveness", func(t *testing.T) {
 		response := performRequest(handler, http.MethodGet, "/health/live", "client-request-1")
@@ -61,7 +61,7 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestRouterUsesUnifiedProblems(t *testing.T) {
-	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second))
+	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second), nil)
 
 	tests := []struct {
 		name     string
@@ -116,7 +116,7 @@ func TestRecovererDoesNotExposePanicValue(t *testing.T) {
 }
 
 func TestInvalidRequestIDIsReplaced(t *testing.T) {
-	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second))
+	handler := NewHandler(discardLogger(), NewReadiness(&stubDatabasePinger{}, time.Second), nil)
 	response := performRequest(handler, http.MethodGet, "/health/live", "invalid request ID")
 
 	generated := response.Header().Get(requestIDHeader)
