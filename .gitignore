@@ -16,6 +16,7 @@ frontend/.next/
 frontend/out/
 frontend/coverage/
 frontend/npm-debug.log*
+frontend/tsconfig.tsbuildinfo
 
 # Editors and operating systems
 .idea/

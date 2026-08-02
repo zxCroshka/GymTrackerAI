@@ -1,6 +1,6 @@
 # GymTracker AI implementation plan
 
-Status: backend slices through deterministic measurement/progress/report implemented; frontend product slices and AI sequenced
+Status: backend slices through deterministic measurement/progress/report and frontend auth/profile/dashboard foundation implemented; remaining product slices and AI sequenced
 
 Last updated: 2026-08-02
 
@@ -39,7 +39,7 @@ Historical exit gate at completion of Phase 0:
 
 ## 4. Phase 1 — executable foundation and contracts
 
-Implementation was authorized by subsequent requests. The slices provide the Go/chi server and middleware, PostgreSQL startup/readiness foundation, full initial schema and rollback, one-shot migration and seed commands, minimal Next.js/Tailwind/theme shell, lock files, Dockerfiles, Compose, Makefile, CI, and an OpenAPI 3.1 source for implemented auth/profile routes. Frontend API/auth shells remain later work and are not represented by placeholders.
+Implementation was authorized by subsequent requests. The slices provide the Go/chi server and middleware, PostgreSQL startup/readiness foundation, full initial schema and rollback, one-shot migration and seed commands, the Next.js/Tailwind foundation, lock files, Dockerfiles, Compose, Makefile, CI, and an OpenAPI 3.1 source for implemented backend routes. The frontend auth/profile/dashboard shell is now implemented without placeholder product pages.
 
 Deliverables:
 
@@ -64,7 +64,7 @@ Exit gate: a real health/readiness slice runs, fails fast on bad configuration, 
 
 ## 5. Phase 2 — persistence, auth, and profile
 
-Current completion: the requested backend subset is implemented—registration/login, access protection, refresh rotation/replay invalidation, logout/family revocation, own-profile GET/PATCH, and strict transactional JSON import with optional initial measurement. The incremental `000002` migration and OpenAPI/prose contracts are synchronized. Session administration, password change, AI settings, deletion, and all frontend forms remain deliberately future work.
+Current completion: registration/login, access protection, refresh rotation/replay invalidation, logout/family revocation, own-profile GET/PATCH, and strict transactional JSON import with optional initial measurement are implemented. The frontend provides tested login/register forms, refresh-cookie bootstrap, memory-only access tokens, automatic refresh/retry, protected routes, profile editing/import with ETags, and explicit session-expiry behavior. Session administration, password change, AI settings, and account deletion remain deliberately future work.
 
 Deliverables:
 

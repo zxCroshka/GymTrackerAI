@@ -1,25 +1,26 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
-import { ThemeToggle } from "@/components/theme-toggle";
+import { Providers } from "@/components/providers";
 
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GymTracker AI",
-  description: "A planned strength-training tracker with a user-controlled AI coach.",
+  title: { default: "GymTracker AI", template: "%s · GymTracker AI" },
+  description: "Тренировочные программы, дневник и понятная аналитика прогресса.",
 };
+
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#16794b" };
+
+const themeScript = `(() => { try { const saved = localStorage.getItem("gymtracker-theme"); const dark = matchMedia("(prefers-color-scheme: dark)").matches; document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved : dark ? "dark" : "light"; } catch {} })();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ru" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body>
-        <header className="border-b border-[var(--border)] bg-[var(--surface)]">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-            <span className="text-lg font-semibold tracking-tight">GymTracker AI</span>
-            <ThemeToggle />
-          </div>
-        </header>
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

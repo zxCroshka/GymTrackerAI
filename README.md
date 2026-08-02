@@ -52,10 +52,11 @@ The monorepo now contains a working technical foundation:
 - deterministic progress dashboard, weight/moving-average series, per-exercise dynamics, and auditable personal records for max weight, repetitions at an exact weight, set volume, and Epley estimated 1RM;
 - synchronous deterministic weekly report generation under a shared per-user source lock, with profile-local UTC week bounds, previous-week comparison, weight/wellness signals, new records, pain messages, immutable revisions/cutoffs, and transactional staleness/regeneration;
 - `GET /health/live` and `GET /health/ready` operational endpoints;
-- a minimal Next.js App Router application with TypeScript, Tailwind CSS, and persisted light/dark theme selection;
+- a mobile-first Next.js App Router frontend with Russian login, registration, dashboard, profile/import, and settings pages; responsive desktop/mobile navigation; accessible light/dark themes; TanStack Query; React Hook Form/Zod validation; toast, loading, skeleton, error-boundary, and protected-route states;
+- browser authentication that keeps the access JWT only in memory, restores and rotates the HttpOnly refresh-cookie session after reload, retries one failed authenticated request after refresh, and clears user-scoped query data on logout or account change;
 - reproducible Go and npm lock files, unit tests, Dockerfiles, Compose configuration, Make targets, and foundation CI.
 
-Workout/measurement/progress/report frontend screens and AI Coach use cases remain intentionally unimplemented. This stage adds backend APIs only and makes completed-workout completion/correction/deletion rebuild personal records and stale affected current reports through narrow same-transaction ports. Weekly reports contain no AI output and make no OpenAI calls.
+Program, exercise, workout, measurement/chart, report, and AI Coach product screens remain intentionally unimplemented. The dashboard uses the real progress endpoint and the profile forms use the real profile endpoints; no product data is mocked. Weekly reports contain no AI output and make no OpenAI calls.
 
 ## Local development
 
@@ -87,6 +88,8 @@ Run the frontend separately if needed:
 ```bash
 make frontend-dev
 ```
+
+`BACKEND_URL` is read only by Next.js and defaults to `http://localhost:8080`. Next.js transparently rewrites relative browser requests under `/api/v1` to that backend. This preserves the backend REST contract while keeping the refresh cookie same-site; it is not a second business API or token store. Do not expose `BACKEND_URL_CONTAINER` or JWT secrets through `NEXT_PUBLIC_*` variables.
 
 The frontend is available at `http://localhost:3000`; the backend listens at `http://localhost:8080`. Health checks:
 

@@ -1,6 +1,6 @@
 # GymTracker AI architecture
 
-Status: implemented backend baseline through measurement/progress/report; frontend product slices and AI remain proposed
+Status: implemented backend baseline through measurement/progress/report and frontend auth/profile/dashboard foundation; remaining product slices and AI remain proposed
 
 Last updated: 2026-08-02
 
@@ -146,7 +146,7 @@ The first release permits at most one `in_progress` workout per user. The databa
 - Request middleware verifies signature, purpose, issuer, audience, expiry, and user status, then creates an immutable server request context with authenticated user ID, session ID, request ID, and deadline.
 - Application services derive ownership from that context. Payload/path IDs select a resource but never establish its owner.
 
-The browser does not persist access tokens in local storage. After a page reload it obtains a new access token through the protected refresh endpoint. Private screens can render a stable shell and load user data through TanStack Query after session bootstrap; a Next.js BFF is not introduced merely to hide the established Go REST API.
+The browser does not persist access tokens in local storage. After a page reload it obtains a new access token through the protected refresh endpoint. Private screens render a stable shell and load user data through TanStack Query after session bootstrap. The implemented Next.js same-origin rewrite forwards relative `/api/v1` requests to the configured Go backend so the scoped refresh cookie remains first-party; it contains no business logic, does not read tokens, and is not a BFF or alternate API contract.
 
 ## 8. REST API architecture
 
@@ -163,12 +163,14 @@ The browser does not persist access tokens in local storage. After a page reload
 
 ### 9.1 App Router responsibilities
 
-The proposed application is organized by route groups and product features rather than backend layers:
+The application is organized by route groups and product features rather than backend layers. The auth/profile/dashboard foundation is implemented; the remaining named product routes are sequenced later:
 
 - public/auth routes for registration and login;
 - authenticated app shell for dashboard, programs, active workout, history, measurements, progress, weekly reports, profile, and coach;
 - feature-local components, Zod schemas, forms, query keys, and API adapters;
 - shared accessible UI primitives based on shadcn/ui-compatible components and Tailwind design tokens.
+
+The implemented authenticated shell is mobile-first: a persistent sidebar appears at desktop widths and an accessible bottom navigation appears on mobile. Route guards wait for refresh-cookie bootstrap before rendering private content, redirect unauthenticated users with a validated same-origin `next` path, and show a recoverable state when session verification is temporarily unavailable. Access tokens and refresh responses remain in memory only; theme preference is the only authentication-adjacent value stored in `localStorage`.
 
 Server Components provide layout and non-secret static content. Interactive/private state, forms, optimistic updates, workout logging, and charts are Client Components only where needed. There is no duplicate business-rule implementation: Zod improves UX at the boundary, while the Go backend remains authoritative.
 

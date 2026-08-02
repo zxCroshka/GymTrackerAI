@@ -2,58 +2,74 @@
 
 :root {
   color-scheme: light;
-  --background: #f6f7f9;
+  --background: #f5f7f5;
   --surface: #ffffff;
+  --surface-strong: #eef3ef;
   --foreground: #17211b;
-  --muted: #5d6b62;
-  --border: #dce3de;
+  --muted: #647168;
+  --border: #d9e1db;
   --accent: #16794b;
+  --accent-hover: #10663e;
+  --accent-soft: #e4f4ea;
   --accent-foreground: #ffffff;
+  --danger: #c53b3b;
+  --danger-soft: #fdeaea;
+  --shadow: 0 12px 34px rgb(23 33 27 / 8%);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --background: #0d1511;
-  --surface: #15201a;
+  --background: #0c1410;
+  --surface: #142019;
+  --surface-strong: #1b2a21;
   --foreground: #eef6f0;
-  --muted: #a9b8ae;
-  --border: #2a3a30;
+  --muted: #a4b4aa;
+  --border: #2a3b30;
   --accent: #58d68d;
+  --accent-hover: #79e5a5;
+  --accent-soft: #173c27;
   --accent-foreground: #07120b;
+  --danger: #ff8585;
+  --danger-soft: #411f22;
+  --shadow: 0 14px 40px rgb(0 0 0 / 24%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --background: #0d1511;
-    --surface: #15201a;
+    --background: #0c1410;
+    --surface: #142019;
+    --surface-strong: #1b2a21;
     --foreground: #eef6f0;
-    --muted: #a9b8ae;
-    --border: #2a3a30;
+    --muted: #a4b4aa;
+    --border: #2a3b30;
     --accent: #58d68d;
+    --accent-hover: #79e5a5;
+    --accent-soft: #173c27;
     --accent-foreground: #07120b;
+    --danger: #ff8585;
+    --danger-soft: #411f22;
+    --shadow: 0 14px 40px rgb(0 0 0 / 24%);
   }
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html {
-  min-width: 320px;
-  background: var(--background);
-}
-
+* { box-sizing: border-box; }
+html { min-width: 320px; background: var(--background); scroll-behavior: smooth; }
 body {
   min-height: 100vh;
   margin: 0;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  text-rendering: optimizeLegibility;
 }
+button, input, select, textarea { font: inherit; }
+button, a, input, select, textarea { outline-color: var(--accent); outline-offset: 3px; }
+button:not(:disabled), a { cursor: pointer; }
+::selection { background: var(--accent-soft); color: var(--foreground); }
 
-button,
-a {
-  outline-color: var(--accent);
-  outline-offset: 3px;
-}
+.safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+.surface-shadow { box-shadow: var(--shadow); }
+.theme-icon-sun { display: none; }
+:root[data-theme="dark"] .theme-icon-sun { display: block; }
+:root[data-theme="dark"] .theme-icon-moon { display: none; }
